@@ -1,40 +1,30 @@
-import torch
-import torch.nn.functional as F
+import networkx as nx
 from torch_geometric.datasets import Planetoid
-from torch_geometric.nn import GCNConv
+from node2vec import Node2Vec
+import numpy as np
 
-class GCN(torch.nn.Module):
-    def __init__(self, feature_dim, hidden_dim, num_classes):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(feature_dim, hidden_dim)
-        self.conv2 = GCNConv(hidden_dim, num_classes)
+# 加载Cora数据集
+def load_cora():
+    # 加载Cora数据集
+    dataset = Planetoid(root='./data/Cora', name='Cora')
+    data = dataset[0]
 
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
+    # 创建图
+    G = data.to_networkx()
+    return G
 
-        x = self.conv1(x, edge_index)
-        x = F.relu(x)
-        x = F.dropout(x, training=self.training)
-        x = self.conv2(x, edge_index)
+# 创建Cora图
+G = load_cora()
 
-        return F.log_softmax(x, dim=1)
+# 应用node2vec模型
+node2vec = Node2Vec(G, dimensions=128, walk_length=30, num_walks=200, workers=4)
+model = node2vec.fit(window=10, min_count=1, batch_words=4)
 
-def train(model, data, optimizer):
-    model.train()
-    optimizer.zero_grad()
-    out = model(data)
-    loss = F.nll_loss(out[data.train_mask], data.y[data.train_mask])
-    loss.backward()
-    optimizer.step()
-    return loss
+# 获取节点向量表示
+embeddings = {node: model.wv[node] for node in G.nodes()}
 
-# 加载 Cora 数据集
-dataset = Planetoid(root='/tmp/Cora', name='Cora')
+# 打印某个节点的向量表示
+print(embeddings[1])  # 假设节点1的向量表示
 
-model = GCN(dataset.num_node_features, 16, dataset.num_classes)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
-
-data = dataset[0]
-for epoch in range(200):
-    loss = train(model, data, optimizer)
-    print(f'Epoch {epoch+1}, Loss: {loss.item()}')
+# 保存嵌入向量到文件
+np.save("cora_embeddings.npy", np.array(list(embeddings.values())))
