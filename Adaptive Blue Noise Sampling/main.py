@@ -1,5 +1,6 @@
 import networkx as nx
 from torch_geometric.datasets import Planetoid
+from torch_geometric.utils import to_networkx
 from node2vec import Node2Vec
 import numpy as np
 
@@ -10,11 +11,13 @@ def load_cora():
     data = dataset[0]
 
     # 创建图
-    G = data.to_networkx()
+    G = to_networkx(data, to_undirected=True)
     return G
 
 # 创建Cora图
 G = load_cora()
+
+print("1")
 
 # 应用node2vec模型
 node2vec = Node2Vec(G, dimensions=128, walk_length=30, num_walks=200, workers=4)
