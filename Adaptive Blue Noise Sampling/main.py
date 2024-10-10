@@ -6,7 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 if __name__ == '__main__':
-    for r in [100000, 25000, 6000, 1250, 300]:
+    # for r in [100000, 25000, 6000, 1250, 300]:
+    for r in [300, 100, 50, 10]:
         t1 = time.time()
 
         # 读取 t-SNE 结果
