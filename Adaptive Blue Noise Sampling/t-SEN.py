@@ -1,8 +1,7 @@
-from sklearn.manifold import TSNE
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
 import matplotlib.pyplot as plt
-from scipy.ndimage import generic_filter
+from sklearn.manifold import TSNE
+import networkx as nx
 from torch_geometric.datasets import Planetoid
 from torch_geometric.utils import to_networkx
 
@@ -20,75 +19,54 @@ def load_cora():
 G = load_cora()
 
 # 加载之前保存的节点嵌入向量
-embeddings = np.load("cora_embeddings.npy")
+embeddings = np.load("./cora_embeddings.npy")
+
+print(embeddings)
 
 # 初始化t-SNE对象
 tsne = TSNE(n_components=2, random_state=0)
-
-# 进行降维处理
 tsne_result = tsne.fit_transform(embeddings)
 
-# 可视化降维结果
-plt.figure(figsize=(10, 8))
-plt.scatter(tsne_result[:, 0], tsne_result[:, 1])# 绘制边
+# 可视化t-SNE结果
+plt.figure(figsize=(15, 7))
+
+# 绘制原始图
+plt.subplot(1, 2, 1)
+plt.scatter(embeddings[:, 0], embeddings[:, 1], c='lightblue', edgecolor='none', s=5)
+plt.title('Original Embedding Space')
+plt.xlabel('Feature 1')
+plt.ylabel('Feature 2')
+
+# 绘制边
 edge_color = 'gray'
 for edge in G.edges():
-    source, target = edge
-    source_idx = list(embeddings.keys()).index(source)
-    target_idx = list(embeddings.keys()).index(target)
-    plt.plot([tsne_result[source_idx, 0], tsne_result[target_idx, 0]], [tsne_result[source_idx, 1], tsne_result[target_idx, 1]], color=edge_color)
+    source_idx = list(G.nodes()).index(edge[0])
+    target_idx = list(G.nodes()).index(edge[1])
+    # 由于原始特征可能不是二维的，这里仅示意，实际可能需要根据实际维度调整
+    plt.plot([embeddings[source_idx, 0], embeddings[target_idx, 0]], [embeddings[source_idx, 1], embeddings[target_idx, 1]], color=edge_color, alpha=0.1)
 
-plt.title('t-SNE visualization of node embeddings with edges')
-plt.xlabel('t-SNE feature 1')
-plt.ylabel('t-SNE feature 2')
-plt.show()
+# 绘制t-SNE降维后的图
+plt.subplot(1, 2, 2)
+plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c='lightgreen', edgecolor='none', s=5)
+plt.title('t-SNE Reduced Space')
+plt.xlabel('t-SNE Feature 1')
+plt.ylabel('t-SNE Feature 2')
 
-# ------------ 采样 -------------
+# 绘制边
+for edge in G.edges():
+    source_idx = list(G.nodes()).index(edge[0])
+    target_idx = list(G.nodes()).index(edge[1])
+    plt.plot([tsne_result[source_idx, 0], tsne_result[target_idx, 0]], [tsne_result[source_idx, 1], tsne_result[target_idx, 1]], color=edge_color, alpha=0.1)
 
-def adaptive_blue_noise_sampling(points, k=4, radius_scale=1.0):
-    """
-    自适应蓝噪声采样
-    :param points: t-SNE降维后的点集
-    :param k: 每个点的最近邻数，用于计算密度
-    :param radius_scale: 半径的比例因子
-    :return: 采样点的索引
-    """
-    # 计算k最近邻距离，用于估计密度
-    neigh = NearestNeighbors(n_neighbors=k)
-    neigh.fit(points)
-    distances, indices = neigh.kneighbors(points)
-
-    # 计算密度，即1/k最近邻距离
-    densities = 1.0 / distances[:, -1].squeeze()
-
-    # 计算每个点的Poisson圆盘半径
-    radius = np.mean(distances[:, -1]) * radius_scale
-
-    # 创建网格
-    grid_x, grid_y = np.mgrid[0:1:128j, 0:1:128j]
-    points_grid = np.array([grid_x.ravel(), grid_y.ravel()]).T
-
-    # 计算采样概率
-    sampling_prob = np.minimum(1.0, densities / np.max(densities))
-    sampling_mask = generic_filter(sampling_prob, lambda arr: np.sum(arr <= radius * radius_scale), size=(128, 128),
-                                   mode='constant')
-
-    # 选择采样点
-    sampled_indices = np.where(sampling_mask.ravel())
-    sampled_points_indices = np.random.choice(sampled_indices[0], size=int(len(sampled_indices[0]) * 0.05),
-                                              replace=False)
-
-    return sampled_points_indices
+# 保存图像到文件
+plt.savefig('t-sne-comparison.png', dpi=300)  # dpi参数控制图像质量
+plt.show()  # 显示图像
 
 
-# # 使用自适应蓝噪声采样
-# sampled_indices = adaptive_blue_noise_sampling(tsne_result)
-#
-# # 可视化采样结果
-# plt.figure(figsize=(10, 8))
-# plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c='lightgray', edgecolor='none', s=1)
-# plt.scatter(tsne_result[sampled_indices, 0], tsne_result[sampled_indices, 1], c='red', edgecolor='none', s=10)
-# plt.title('Adaptive Blue Noise Sampling')
-# plt.xlabel('t-SNE feature 1')
-# plt.ylabel('t-SNE feature 2')
-# plt.show()
+# ------------ 保存 t-SNE 结果到文件 ------------
+
+# 保存 tsne_result 为 .npy 文件
+np.save("tsne_results.npy", tsne_result)
+
+# 打印消息确认保存成功
+print("t-SNE results have been saved to 'tsne_results.npy'")
