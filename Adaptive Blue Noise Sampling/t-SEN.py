@@ -21,6 +21,8 @@ G = load_cora()
 # 加载之前保存的节点嵌入向量
 embeddings = np.load("./cora_embeddings.npy")
 
+print(embeddings)
+
 # 初始化t-SNE对象
 tsne = TSNE(n_components=2, random_state=0)
 tsne_result = tsne.fit_transform(embeddings)
@@ -59,3 +61,12 @@ for edge in G.edges():
 # 保存图像到文件
 plt.savefig('t-sne-comparison.png', dpi=300)  # dpi参数控制图像质量
 plt.show()  # 显示图像
+
+
+# ------------ 保存 t-SNE 结果到文件 ------------
+
+# 保存 tsne_result 为 .npy 文件
+np.save("tsne_results.npy", tsne_result)
+
+# 打印消息确认保存成功
+print("t-SNE results have been saved to 'tsne_results.npy'")
