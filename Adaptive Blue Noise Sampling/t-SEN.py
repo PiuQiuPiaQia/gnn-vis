@@ -26,19 +26,36 @@ tsne = TSNE(n_components=2, random_state=0)
 tsne_result = tsne.fit_transform(embeddings)
 
 # 可视化t-SNE结果
-plt.figure(figsize=(10, 8))
-plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c='lightblue', edgecolor='none', s=5)
+plt.figure(figsize=(15, 7))
+
+# 绘制原始图
+plt.subplot(1, 2, 1)
+plt.scatter(embeddings[:, 0], embeddings[:, 1], c='lightblue', edgecolor='none', s=5)
+plt.title('Original Embedding Space')
+plt.xlabel('Feature 1')
+plt.ylabel('Feature 2')
 
 # 绘制边
 edge_color = 'gray'
 for edge in G.edges():
     source_idx = list(G.nodes()).index(edge[0])
     target_idx = list(G.nodes()).index(edge[1])
+    # 由于原始特征可能不是二维的，这里仅示意，实际可能需要根据实际维度调整
+    plt.plot([embeddings[source_idx, 0], embeddings[target_idx, 0]], [embeddings[source_idx, 1], embeddings[target_idx, 1]], color=edge_color, alpha=0.1)
+
+# 绘制t-SNE降维后的图
+plt.subplot(1, 2, 2)
+plt.scatter(tsne_result[:, 0], tsne_result[:, 1], c='lightgreen', edgecolor='none', s=5)
+plt.title('t-SNE Reduced Space')
+plt.xlabel('t-SNE Feature 1')
+plt.ylabel('t-SNE Feature 2')
+
+# 绘制边
+for edge in G.edges():
+    source_idx = list(G.nodes()).index(edge[0])
+    target_idx = list(G.nodes()).index(edge[1])
     plt.plot([tsne_result[source_idx, 0], tsne_result[target_idx, 0]], [tsne_result[source_idx, 1], tsne_result[target_idx, 1]], color=edge_color, alpha=0.1)
 
-plt.title('t-SNE visualization of node embeddings with edges')
-plt.xlabel('t-SNE feature 1')
-plt.ylabel('t-SNE feature 2')
-
 # 保存图像到文件
-plt.savefig('t-sne-cora-embeddings.png', dpi=300)  # dpi参数控制图像质量
+plt.savefig('t-sne-comparison.png', dpi=300)  # dpi参数控制图像质量
+plt.show()  # 显示图像
