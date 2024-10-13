@@ -48,7 +48,7 @@ if __name__ == '__main__':
         return subgraph
 
     # 计算原图中点数量的10%
-    num_sampling_nodes = int(0.1 * len(G.nodes()))
+    num_sampling_nodes = int(0.34 * len(G.nodes()))
     G_sampling = ties_sampling(G, num_sampling_nodes)
 
     # 定义左上角区域

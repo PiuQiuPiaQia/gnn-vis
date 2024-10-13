@@ -1,22 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
-import networkx as nx
-from torch_geometric.datasets import Planetoid
-from torch_geometric.utils import to_networkx
-
-# 加载Cora数据集
-def load_cora():
-    # 加载Cora数据集
-    dataset = Planetoid(root='./data/Cora', name='Cora')
-    data = dataset[0]
-
-    # 创建图
-    G = to_networkx(data, to_undirected=True)
-    return G
+from load_dataset import load_dataset
 
 # 创建Cora图
-G = load_cora()
+G, data = load_dataset()
 
 # 加载之前保存的节点嵌入向量
 embeddings = np.load("./cora_embeddings.npy")
