@@ -33,7 +33,7 @@ if __name__ == '__main__':
     points = [{'id': i, 'lat': float(point[0]), 'lng': float(point[1])} for i, point in enumerate(tsne_result)]
 
     # 进行蓝噪声采样
-    samplePoints = blueNoise(points, 10)
+    samplePoints = blueNoise(points, 35)
 
     # 保存采样结果
     recentBlueNoiseFilePath = f'./samplePoints-10.json'
@@ -66,4 +66,4 @@ if __name__ == '__main__':
 
     logging.info('Plot saved for top-left region sampling')
 
-    logging.info(top_left_region)
+    logging.info(f"采样率：{len(samplePoints) / len(points) * 100:.2f}%")

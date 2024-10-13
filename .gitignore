@@ -162,3 +162,4 @@ cython_debug/
 #.idea/
 
 /Adaptive Blue Noise Sampling/data/
+/TIES/data/

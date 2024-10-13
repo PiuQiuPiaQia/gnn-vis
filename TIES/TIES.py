@@ -32,21 +32,24 @@ if __name__ == '__main__':
     points = [{'id': i, 'lat': float(point[0]), 'lng': float(point[1])} for i, point in enumerate(tsne_result)]
 
     # TIES采样算法
-    def ties_sampling(G, num_samples):
-        edges = list(G.edges())
-        sampled_edges = set()
-        while len(sampled_edges) < num_samples:
-            edge = random.choice(edges)
-            if edge not in sampled_edges and (edge[1], edge[0]) not in sampled_edges:
-                sampled_edges.add(edge)
-        sampled_nodes = set()
-        for u, v in sampled_edges:
-            sampled_nodes.add(u)
-            sampled_nodes.add(v)
-        return G.subgraph(sampled_nodes)
 
-    num_samples = 1000  # 你可以根据需要调整采样的边数
-    G_sampling = ties_sampling(G, num_samples)
+    def ties_sampling(G, num_samples):
+        nodes = list(G.nodes())  # 获取所有节点的列表
+        sampled_nodes = set()  # 初始化一个空集合来存储采样的节点
+
+        # 循环直到采样的节点数量达到num_samples
+        while len(sampled_nodes) < num_samples:
+            node = random.choice(nodes)  # 从所有节点中随机选择一个节点
+            if node not in sampled_nodes:  # 如果该节点尚未被采样
+                sampled_nodes.add(node)  # 将其添加到采样节点集合中
+
+        # 创建采样子图，包含所有采样的节点及其相关的边
+        subgraph = G.subgraph(sampled_nodes)
+        return subgraph
+
+    # 计算原图中点数量的10%
+    num_sampling_nodes = int(0.1 * len(G.nodes()))
+    G_sampling = ties_sampling(G, num_sampling_nodes)
 
     # 定义左上角区域
     top_left_region = {'lat_max': 32, 'lng_min': -59, 'lat_min': 28, 'lng_max': -54}
@@ -72,3 +75,5 @@ if __name__ == '__main__':
     plt.close()
 
     logging.info('Plot saved for TIES top-left region sampling')
+
+    logging.info(f"采样率：{len(G_sampling.nodes()) / len(points) * 100:.2f}%")
