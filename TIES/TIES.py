@@ -3,15 +3,7 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
-from torch_geometric.datasets import Planetoid
-from torch_geometric.utils import to_networkx
-
-# 加载Cora数据集
-def load_cora():
-    dataset = Planetoid(root='../Adaptive Blue Noise Sampling/data/Cora', name='Cora')
-    data = dataset[0]
-    G = to_networkx(data, to_undirected=True)
-    return G, data
+from load_dataset import load_dataset
 
 # 绘制矩形区域
 def draw_box(ax, region, color):
@@ -25,7 +17,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
     # 加载Cora图和数据
-    G, data = load_cora()
+    G, data = load_dataset()
 
     # 读取 t-SNE 结果
     tsne_result = np.load("../Adaptive Blue Noise Sampling/amazon-tsne_results.npy")
