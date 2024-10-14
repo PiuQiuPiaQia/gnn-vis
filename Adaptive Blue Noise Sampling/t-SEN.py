@@ -10,7 +10,7 @@ G, data = load_dataset()
 # embeddings = np.load("./cora_embeddings.npy")
 embeddings = np.load("./amazon_embeddings.npy")
 
-# print(embeddings)
+# print(embeddings[1])
 
 # 初始化t-SNE对象
 tsne = TSNE(n_components=2, random_state=0)

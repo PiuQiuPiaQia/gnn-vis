@@ -21,11 +21,11 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
     # 读取 t-SNE 结果
-    tsne_result = np.load("tsne_results.npy")
+    tsne_result = np.load("amazon-tsne_results.npy")
     points = [{'id': i, 'lat': float(point[0]), 'lng': float(point[1])} for i, point in enumerate(tsne_result)]
 
     # 进行蓝噪声采样
-    samplePoints = blueNoise(points, 10)
+    samplePoints = blueNoise(points, 8)
     # 获取采样点的ID
     sampled_node_ids = [point['id'] for point in samplePoints]
     # 创建采样子图
@@ -46,6 +46,7 @@ if __name__ == '__main__':
 
     # 绘制原图
     pos = {node: (point['lng'], point['lat']) for node, point in zip(range(len(points)), points)}
+    print(len(points))
     nx.draw_networkx(G, pos, node_color='black', node_size=10, edge_color='lightgray', with_labels=False)
     plt.title('Original Graph')
 

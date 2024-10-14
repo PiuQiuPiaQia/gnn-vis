@@ -28,6 +28,6 @@ def load_dataset():
 G, data = load_dataset()
 
 print(len(G.nodes()), len(G.edges()))
-print(data.x)
-print(data.y)
-print(data.edge_index)
+# print(data.x)
+# print(data.y)
+# print(data.edge_index)
