@@ -28,7 +28,7 @@ if __name__ == '__main__':
     G, data = load_cora()
 
     # 读取 t-SNE 结果
-    tsne_result = np.load("../Adaptive Blue Noise Sampling/tsne_results.npy")
+    tsne_result = np.load("../Adaptive Blue Noise Sampling/amazon-tsne_results.npy")
     points = [{'id': i, 'lat': float(point[0]), 'lng': float(point[1])} for i, point in enumerate(tsne_result)]
 
     # TIES采样算法
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     plt.ylabel('Latitude')
     plt.legend(['Top-Left Region'])
     plt.tight_layout()
-    plt.savefig(f'./ties-top-left-region-sampling.png')
+    plt.savefig(f'./amazon-ties-top-left-region-sampling.png')
     plt.show()
     plt.close()
 

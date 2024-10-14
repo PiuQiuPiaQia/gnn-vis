@@ -7,7 +7,8 @@ from load_dataset import load_dataset
 G, data = load_dataset()
 
 # 加载之前保存的节点嵌入向量
-embeddings = np.load("./cora_embeddings.npy")
+# embeddings = np.load("./cora_embeddings.npy")
+embeddings = np.load("./amazon_embeddings.npy")
 
 print(embeddings)
 
@@ -47,14 +48,16 @@ for edge in G.edges():
     plt.plot([tsne_result[source_idx, 0], tsne_result[target_idx, 0]], [tsne_result[source_idx, 1], tsne_result[target_idx, 1]], color=edge_color, alpha=0.1)
 
 # 保存图像到文件
-plt.savefig('t-sne-comparison.png', dpi=300)  # dpi参数控制图像质量
+# plt.savefig('cora-t-sne-comparison.png', dpi=300)  # dpi参数控制图像质量
+plt.savefig('amazon-t-sne-comparison.png', dpi=300)  # dpi参数控制图像质量
 plt.show()  # 显示图像
 
 
 # ------------ 保存 t-SNE 结果到文件 ------------
 
 # 保存 tsne_result 为 .npy 文件
-np.save("tsne_results.npy", tsne_result)
+# np.save("cora-tsne_results.npy", tsne_result)
+np.save("amazon-tsne_results.npy", tsne_result)
 
 # 打印消息确认保存成功
 print("t-SNE results have been saved to 'tsne_results.npy'")
