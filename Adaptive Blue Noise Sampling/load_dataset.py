@@ -4,7 +4,7 @@ from torch_geometric.utils import to_networkx
 
 def load_dataset():
     # 加载Cora数据集
-    dataset = Planetoid(root='./data/Cora', name='Cora')
+    # dataset = Planetoid(root='./data/Cora', name='Cora')
 
     # 加载Amazon Co-purchase数据集
     # nodes: 13,752
