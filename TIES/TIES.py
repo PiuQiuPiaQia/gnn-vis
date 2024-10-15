@@ -40,11 +40,11 @@ if __name__ == '__main__':
         return subgraph
 
     # 计算原图中点数量的10%
-    num_sampling_nodes = int(0.34 * len(G.nodes()))
+    num_sampling_nodes = int(0.1 * len(G.nodes()))
     G_sampling = ties_sampling(G, num_sampling_nodes)
 
     # 定义左上角区域
-    top_left_region = {'lat_max': 32, 'lng_min': -59, 'lat_min': 28, 'lng_max': -54}
+    top_left_region = {'lat_max': 32, 'lng_min': -96, 'lat_min': 24, 'lng_max': -88}
 
     # 创建绘图
     plt.figure(figsize=(12, 8))
