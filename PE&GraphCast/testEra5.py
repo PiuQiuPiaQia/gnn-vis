@@ -15,7 +15,8 @@ subset = temperature.sel(time=slice('2020-01-01', '2020-01-01'))
 
 # 计算平均温度
 mean_temp = subset.mean(dim='time')
-print(mean_temp)
+
+mean_temp.to_netcdf('mean_temperature.nc')
 
 
 # 绘制温度数据
@@ -27,3 +28,7 @@ print("------------")
 print(climatology)
 print("------------")
 print(subset)
+print("------------")
+# 经度以1.5度为步长，共有240个数据点
+# 维度以0.5度为步长，共有121个数据点
+print(mean_temp)
