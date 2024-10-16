@@ -16,7 +16,7 @@ subset = temperature.sel(time=slice('2020-01-01', '2020-01-01'))
 # 计算平均温度
 mean_temp = subset.mean(dim='time')
 
-mean_temp.to_netcdf('mean_temperature.nc')
+# mean_temp.to_netcdf('mean_temperature.nc')
 
 
 # 绘制温度数据
