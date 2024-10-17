@@ -18,9 +18,11 @@ mean_temp = subset.mean(dim='time')
 
 mean_temp.to_netcdf('mean_temperature.nc')
 
-# # 绘制温度数据
-# mean_temp.plot()
-# plt.show()
+# 绘制温度数据
+mean_temp.plot()
+plt.show()
+plt.savefig('mean_temperature.png')
+
 
 
 print("------------")
