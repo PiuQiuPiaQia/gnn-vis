@@ -3,7 +3,7 @@ import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
-from blue_noise import blueNoise
+from utils.blue_noise import blueNoise
 from load_dataset import load_dataset
 
 # 创建Cora图

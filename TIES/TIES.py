@@ -20,7 +20,7 @@ if __name__ == '__main__':
     G, data = load_dataset()
 
     # 读取 t-SNE 结果
-    tsne_result = np.load("../Adaptive Blue Noise Sampling/amazon-tsne_results.npy")
+    tsne_result = np.load("../AdaptiveBlueNoiseSampling/amazon-tsne_results.npy")
     points = [{'id': i, 'lat': float(point[0]), 'lng': float(point[1])} for i, point in enumerate(tsne_result)]
 
     # TIES采样算法
