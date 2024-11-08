@@ -163,3 +163,4 @@ cython_debug/
 /AdaptiveBlueNoiseSampling/data/
 /TIES/data/
 /GraphCast/graphcast-graph/
+/GraphCast/graphcast/

@@ -5,6 +5,9 @@
       <excludeFolder url="file://$MODULE_DIR$/TIES/data/Cora/Cora" />
       <excludeFolder url="file://$MODULE_DIR$/data" />
       <excludeFolder url="file://$MODULE_DIR$/venv" />
+      <excludeFolder url="file://$MODULE_DIR$/AdaptiveBlueNoiseSampling/data" />
+      <excludeFolder url="file://$MODULE_DIR$/GraphCast/graphcast-graph" />
+      <excludeFolder url="file://$MODULE_DIR$/TIES/data" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
