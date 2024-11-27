@@ -164,3 +164,4 @@ cython_debug/
 /TIES/data/
 /GraphCast/graphcast-data/
 /GraphCast/graphcast/
+*/data/*
