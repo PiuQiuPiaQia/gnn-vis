@@ -13,6 +13,14 @@
 # %%
 # ==================== 导入库 ====================
 
+import sys
+from pathlib import Path
+
+# 添加 graphcast 源码路径（相对于当前脚本）
+# weather-analysis 的父目录是 GraphCast，其中包含 graphcast 源码
+SCRIPT_DIR = Path(__file__).parent.resolve()
+sys.path.insert(0, str(SCRIPT_DIR.parent))
+
 import dataclasses
 import functools
 import glob
