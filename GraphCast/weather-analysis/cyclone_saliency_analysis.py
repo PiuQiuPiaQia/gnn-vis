@@ -54,8 +54,8 @@ dir_path_dataset = "/root/data/dataset"
 dir_path_stats = "/root/data/stats"
 
 # 选择模型和数据集
-params_file = "GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
-dataset_file = "source-era5_date-2022-01-01_res-1.0_levels-13_steps-01.nc"
+params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
+dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
 
 # %%
 # ==================== 辅助函数 ====================
@@ -83,7 +83,7 @@ print("模型配置:", model_config)
 print("正在加载数据集...")
 
 # 加载气象数据
-with open(f"{dir_path_dataset}/dataset-{dataset_file}", "rb") as f:
+with open(f"{dir_path_dataset}/{dataset_file}", "rb") as f:
     example_batch = xarray.load_dataset(f).compute()
 
 print("数据维度:", example_batch.dims.mapping)
