@@ -2,11 +2,11 @@
 """
 计算台风中心在全球网格张量中的索引位置
 
-根据 ERA5/GraphCast 的全球分辨率（0.25度），
+根据 ERA5/GraphCast 的全球分辨率（1度），
 将真实经纬度坐标转换为网格索引 (lat_index, lon_index)
 
 台风中心: (-21.7005°S, 157.5°E)
-计算结果: (lat_idx, lon_idx) = (273, 630)
+计算结果: (lat_idx, lon_idx) = (68, 158)
 """
 
 import xarray as xr
@@ -20,7 +20,7 @@ CYCLONE_CENTER_LAT = -21.7005  # 南纬 21.7005度
 CYCLONE_CENTER_LON = 157.5000  # 东经 157.5度
 
 # ERA5/GraphCast 全球网格参数
-RESOLUTION = 0.25  # 分辨率 (度)
+RESOLUTION = 1.0  # 分辨率 (度)
 LAT_MIN_GLOBAL = -90.0  # 全球纬度起始值 (南纬90度)
 LAT_MAX_GLOBAL = 90.0   # 全球纬度结束值 (北纬90度)
 LON_MIN_GLOBAL = 0.0    # 全球经度起始值
