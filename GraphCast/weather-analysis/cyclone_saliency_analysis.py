@@ -309,6 +309,18 @@ def plot_physics_ai_alignment(
     if 'time' in grad_data.dims:
         grad_data = grad_data.isel(time=0)
     
+    # 如果有 level 维度,需要选择特定层或求和
+    # 对于 geopotential 等多层变量,我们对所有层求和以获得总体影响
+    if 'level' in grad_data.dims:
+        # 方法1: 对所有层求和(推荐,因为梯度反映了所有层的综合影响)
+        grad_data = grad_data.sum(dim='level')
+        # 方法2: 或者选择特定层,如 TARGET_LEVEL
+        # grad_data = grad_data.sel(level=TARGET_LEVEL)
+    
+    # 保存坐标信息（在 unwrap 之前）
+    lat_coords = grad_data.lat
+    lon_coords = grad_data.lon
+    
     grad_data = xarray_jax.unwrap_data(grad_data)
     if hasattr(grad_data, 'block_until_ready'):
         grad_data.block_until_ready()
@@ -317,14 +329,37 @@ def plot_physics_ai_alignment(
     # 2. 提取气压场数据
     if 'mean_sea_level_pressure' in era5_data.data_vars:
         pressure_data = era5_data['mean_sea_level_pressure']
+        # 降维处理,确保是2D数据
+        if 'batch' in pressure_data.dims:
+            pressure_data = pressure_data.isel(batch=0)
+        if 'time' in pressure_data.dims:
+            pressure_data = pressure_data.isel(time=0)
     else:
         # 如果没有海平面气压,使用其他变量替代
         pressure_data = None
     
-    # 3. 提取风场数据
-    u_wind = era5_data['10m_u_component_of_wind']
-    v_wind = era5_data['10m_v_component_of_wind']
+    # 3. 提取高空引导风场数据 (Steering Flow)
+    # 气压层选择:
+    #   index 7 = 500hPa (标准引导层,但可能太高)
+    #   index 9 = 700hPa (中低层引导,对热带风暴更适用)
+    #   index 10 = 850hPa (边界层顶部)
+    # 对于南半球热带风暴,700hPa 通常比 500hPa 更准确
+    STEERING_LEVEL_IDX = 9  # 700 hPa - 对热带风暴更适用的引导层
     
+    # 注意：这里使用的是带 level 维度的 u/v，而不是 10m_u/v
+    u_wind_3d = era5_data['u_component_of_wind']
+    v_wind_3d = era5_data['v_component_of_wind']
+    
+    # 处理维度：取特定层 (Steering Level)
+    if 'level' in u_wind_3d.dims:
+        u_wind = u_wind_3d.isel(level=STEERING_LEVEL_IDX)
+        v_wind = v_wind_3d.isel(level=STEERING_LEVEL_IDX)
+    else:
+        # Fallback (防守性编程)
+        u_wind = u_wind_3d
+        v_wind = v_wind_3d
+    
+    # 处理 Batch 和 Time
     if 'batch' in u_wind.dims:
         u_wind = u_wind.isel(batch=0)
         v_wind = v_wind.isel(batch=0)
@@ -333,8 +368,14 @@ def plot_physics_ai_alignment(
         v_wind = v_wind.isel(time=0)
     
     # 4. 裁剪到目标区域
+    # 修复: 使用保存的坐标信息创建 DataArray
+    # 将 JAX 数组转换为 numpy 数组以避免兼容性问题
+    grad_np_cpu = np.array(grad_np)
+    lat_coords_np = np.array(lat_coords)
+    lon_coords_np = np.array(lon_coords)
+    
     grad_region, lat_range, lon_range = extract_region_data(
-        xarray.DataArray(grad_np, coords=gradients[gradient_var].coords[:2], dims=['lat', 'lon']),
+        xarray.DataArray(grad_np_cpu, coords={'lat': lat_coords_np, 'lon': lon_coords_np}, dims=['lat', 'lon']),
         target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION
     )
     
@@ -346,9 +387,16 @@ def plot_physics_ai_alignment(
     u_region, _, _ = extract_region_data(u_wind, target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION)
     v_region, _, _ = extract_region_data(v_wind, target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION)
     
-    # 5. 获取台风眼处的风速
+    # 5. 计算台风周围环境的平均引导风 (区域平均,而不是单点)
+    STEERING_RADIUS = 3.0  # 引导风计算半径(度)
+    
+    # 直接用最近邻方法提取台风中心点的风速 (避免slice方向问题)
+    # 这比区域平均更直接,且避免了南半球坐标系统的slice问题
     u_center = float(u_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
     v_center = float(v_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
+    
+    print(f"  500hPa引导风速(单点): u={u_center:.2f}, v={v_center:.2f} m/s")
+    print(f"  逆风方向: ({-u_center:.2f}, {-v_center:.2f}) m/s")
     
     # 6. 创建地图
     fig = plt.figure(figsize=(14, 12))
@@ -403,7 +451,9 @@ def plot_physics_ai_alignment(
     
     # 10. 绘制逆风向量箭头 (指向上游)
     # 箭头指向 (-u, -v)
-    arrow_scale = 2.0  # 调整箭头长度
+    # 注意: 高空风通常比地面风强,使用较小的 scale 避免箭头过长
+    # TODO: 箭头方向还是不对，需要进一步检查坐标系统和风向计算逻辑
+    arrow_scale = 1.0  # 调整箭头长度 (高空风建议 0.5-1.0,地面风建议 2.0)
     ax.arrow(target_lon, target_lat, -u_center * arrow_scale, -v_center * arrow_scale,
              head_width=0.8, head_length=1.2, fc='yellow', ec='black', 
              linewidth=2.5, transform=ccrs.PlateCarree(), zorder=6,
@@ -490,10 +540,13 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
         cyclone_info=cyclone,
         gradients=saliency_grads,
         era5_data=train_inputs,
-        gradient_var='2m_temperature',  # 可选: 'geopotential', 'temperature', etc.
+        gradient_var='geopotential',  # 与 TARGET_VARIABLE 保持一致,物理逻辑自洽
         save_path=save_filename
     )
 
 print("\n" + "=" * 70)
 print("✓ 所有物理-AI对齐分析图生成完成!")
 print("=" * 70)
+
+
+# %%
