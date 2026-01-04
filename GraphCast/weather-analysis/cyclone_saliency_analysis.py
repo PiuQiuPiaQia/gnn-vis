@@ -21,6 +21,10 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
+# 添加 graphcast-preprocess 路径以导入 latlon_utils
+PREPROCESS_DIR = SCRIPT_DIR.parent / "graphcast-preprocess"
+sys.path.insert(0, str(PREPROCESS_DIR))
+
 import dataclasses
 import functools
 import glob
@@ -42,6 +46,9 @@ from graphcast import rollout
 from graphcast import xarray_jax
 from graphcast import xarray_tree
 import haiku as hk
+
+# 导入经纬度转换工具
+from latlon_utils import latlon_to_index, index_to_latlon
 
 print("JAX devices:", jax.devices())
 
@@ -175,11 +182,30 @@ print("模型编译完成!")
 # %%
 # ==================== Saliency Map 配置 ====================
 
-# 目标点索引 (lat_idx, lon_idx)
-# 对于 1.0° 分辨率: lat_idx = (lat + 90) / 1.0, lon_idx = lon / 1.0
-# 例如: 台风中心 (-21.7°S, 157.5°E) -> (68, 158)
-TARGET_LAT_IDX = 68
-TARGET_LON_IDX = 158
+# 台风中心真实坐标（台风 Seth）
+CYCLONE_CENTER_LAT = -21.7005  # 南纬 21.7005度
+CYCLONE_CENTER_LON = 157.5000  # 东经 157.5度
+
+# 数据网格分辨率
+GRID_RESOLUTION = 1.0  # 度
+
+# 使用 latlon_utils 动态计算目标点索引
+TARGET_LAT_IDX, TARGET_LON_IDX = latlon_to_index(
+    lat=CYCLONE_CENTER_LAT,
+    lon=CYCLONE_CENTER_LON,
+    resolution=GRID_RESOLUTION,
+    lat_min=-90.0,
+    lon_min=0.0
+)
+
+# 反向验证
+verified_lat, verified_lon = index_to_latlon(
+    lat_idx=TARGET_LAT_IDX,
+    lon_idx=TARGET_LON_IDX,
+    resolution=GRID_RESOLUTION,
+    lat_min=-90.0,
+    lon_min=0.0
+)
 
 # 目标变量配置
 TARGET_VARIABLE = 'geopotential'  # 位势高度
@@ -188,7 +214,10 @@ TARGET_TIME_IDX = 0                # 预测的第几个时间步
 NEGATIVE_GRADIENT = True           # True: 关注导致值降低的因素
 
 print(f"\nSaliency Map 配置:")
-print(f"  目标点索引: (lat={TARGET_LAT_IDX}, lon={TARGET_LON_IDX})")
+print(f"  台风中心真实坐标: ({CYCLONE_CENTER_LAT}°, {CYCLONE_CENTER_LON}°)")
+print(f"  网格分辨率: {GRID_RESOLUTION}°")
+print(f"  目标点索引: (lat_idx={TARGET_LAT_IDX}, lon_idx={TARGET_LON_IDX})")
+print(f"  验证坐标: ({verified_lat:.4f}°, {verified_lon:.4f}°)")
 print(f"  目标变量: {TARGET_VARIABLE} @ {TARGET_LEVEL} hPa")
 print(f"  负梯度模式: {NEGATIVE_GRADIENT}")
 

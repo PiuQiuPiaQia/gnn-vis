@@ -7,11 +7,14 @@
 
 台风中心: (-21.7005°S, 157.5°E)
 计算结果: (lat_idx, lon_idx) = (68, 158)
+
+注意：本脚本已更新为使用通用的 latlon_utils 模块
 """
 
 import xarray as xr
 import numpy as np
 from pathlib import Path
+from latlon_utils import LatLonGridConverter, latlon_to_index, index_to_latlon
 
 # ==================== 配置参数 ====================
 
@@ -26,12 +29,22 @@ LAT_MAX_GLOBAL = 90.0   # 全球纬度结束值 (北纬90度)
 LON_MIN_GLOBAL = 0.0    # 全球经度起始值
 LON_MAX_GLOBAL = 360.0  # 全球经度结束值 (不包括360)
 
-# ==================== 计算公式 ====================
+# ==================== 使用通用转换器 ====================
 
+# 创建全局网格转换器（复用通用模块）
+converter = LatLonGridConverter(
+    resolution=RESOLUTION,
+    lat_min=LAT_MIN_GLOBAL,
+    lat_max=LAT_MAX_GLOBAL,
+    lon_min=LON_MIN_GLOBAL,
+    lon_max=LON_MAX_GLOBAL
+)
+
+# 为兼容性保留原有函数接口
 def latlon_to_grid_index(lat, lon, resolution=RESOLUTION,
                          lat_min=LAT_MIN_GLOBAL, lon_min=LON_MIN_GLOBAL):
     """
-    将经纬度坐标转换为网格索引
+    将经纬度坐标转换为网格索引（使用通用工具模块）
 
     参数:
         lat: 纬度 (度), 南纬为负, 北纬为正
@@ -43,21 +56,13 @@ def latlon_to_grid_index(lat, lon, resolution=RESOLUTION,
     返回:
         (lat_idx, lon_idx): 网格索引元组
     """
-    # 纬度索引: 从南向北递增
-    # 公式: lat_idx = (lat - lat_min) / resolution
-    lat_idx = int(round((lat - lat_min) / resolution))
-
-    # 经度索引: 从西向东递增
-    # 公式: lon_idx = (lon - lon_min) / resolution
-    lon_idx = int(round((lon - lon_min) / resolution))
-
-    return lat_idx, lon_idx
+    return latlon_to_index(lat, lon, resolution, lat_min, lon_min)
 
 
 def grid_index_to_latlon(lat_idx, lon_idx, resolution=RESOLUTION,
                          lat_min=LAT_MIN_GLOBAL, lon_min=LON_MIN_GLOBAL):
     """
-    将网格索引转换回经纬度坐标
+    将网格索引转换回经纬度坐标（使用通用工具模块）
 
     参数:
         lat_idx: 纬度索引
@@ -69,9 +74,7 @@ def grid_index_to_latlon(lat_idx, lon_idx, resolution=RESOLUTION,
     返回:
         (lat, lon): 经纬度坐标元组
     """
-    lat = lat_min + lat_idx * resolution
-    lon = lon_min + lon_idx * resolution
-    return lat, lon
+    return index_to_latlon(lat_idx, lon_idx, resolution, lat_min, lon_min)
 
 
 def verify_index_with_dataset(lat_idx, lon_idx, dataset_file):
@@ -130,12 +133,12 @@ print(f"  经度范围: [{LON_MIN_GLOBAL}°, {LON_MAX_GLOBAL}°)")
 print(f"  纬度格点数: {int((LAT_MAX_GLOBAL - LAT_MIN_GLOBAL) / RESOLUTION) + 1}")
 print(f"  经度格点数: {int((LON_MAX_GLOBAL - LON_MIN_GLOBAL) / RESOLUTION)}")
 
-# 计算网格索引
+# 计算网格索引（使用通用转换器）
 print("\n" + "=" * 70)
-print("计算结果")
+print("计算结果（使用 latlon_utils 通用模块）")
 print("=" * 70)
 
-lat_idx, lon_idx = latlon_to_grid_index(CYCLONE_CENTER_LAT, CYCLONE_CENTER_LON)
+lat_idx, lon_idx = converter.latlon_to_index(CYCLONE_CENTER_LAT, CYCLONE_CENTER_LON)
 
 print(f"\n【公式】")
 print("-" * 60)
@@ -155,7 +158,7 @@ print(f"台风中心在全球网格中的索引位置:")
 print(f"  (lat_idx, lon_idx) = ({lat_idx}, {lon_idx})")
 
 # 反向验证
-recovered_lat, recovered_lon = grid_index_to_latlon(lat_idx, lon_idx)
+recovered_lat, recovered_lon = converter.index_to_latlon(lat_idx, lon_idx)
 print(f"\n【反向验证】")
 print("-" * 60)
 print(f"索引 ({lat_idx}, {lon_idx}) 对应的经纬度:")
