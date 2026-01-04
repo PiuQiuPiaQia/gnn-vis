@@ -1,11 +1,15 @@
 # %%
 """
-台风 Saliency Map 梯度分析脚本
+台风物理-AI对齐分析脚本
 
-分析 GraphCast 模型中哪些输入区域对台风中心预测贡献最大。
-通过计算模型输出对输入的梯度，了解：
-- 哪些地理位置的输入对台风预测影响最大
-- 哪些气象变量对台风中心预测最敏感
+使用 Matplotlib + Cartopy 绘制台风的物理-AI对齐分析图:
+1. 以台风眼为中心截取 ±15度 范围
+2. 背景绘制 mean_sea_level_pressure 等压线
+3. 叠加梯度热力图 (透明度 0.6)
+4. 在台风眼位置绘制逆风向量箭头 (-u, -v)
+5. 标注台风眼位置 'X'
+
+目标: 验证梯度热力图高亮区域是否与逆风箭头指向一致
 
 路径: GraphCast/weather-analysis/cyclone_saliency_analysis.py
 """
@@ -16,25 +20,28 @@
 import sys
 from pathlib import Path
 
-# 添加 graphcast 源码路径（相对于当前脚本）
-# weather-analysis 的父目录是 GraphCast，其中包含 graphcast 源码
+# 添加 graphcast 源码路径
 SCRIPT_DIR = Path(__file__).parent.resolve()
 sys.path.insert(0, str(SCRIPT_DIR.parent))
 
-# 添加 graphcast-preprocess 路径以导入 latlon_utils
+# 添加 graphcast-preprocess 路径
 PREPROCESS_DIR = SCRIPT_DIR.parent / "graphcast-preprocess"
 sys.path.insert(0, str(PREPROCESS_DIR))
 
 import dataclasses
 import functools
-import glob
-from typing import Optional
+from typing import Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import xarray
+
+# Cartopy 用于地图绘制
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
 
 from graphcast import autoregressive
 from graphcast import casting
@@ -42,33 +49,81 @@ from graphcast import checkpoint
 from graphcast import data_utils
 from graphcast import graphcast
 from graphcast import normalization
-from graphcast import rollout
 from graphcast import xarray_jax
 from graphcast import xarray_tree
 import haiku as hk
 
 # 导入经纬度转换工具
 from latlon_utils import latlon_to_index, index_to_latlon
+# 导入区域数据提取工具
+from region_utils import extract_region_data
 
 print("JAX devices:", jax.devices())
 
 # %%
 # ==================== 路径配置 ====================
-# 请根据你的实际路径修改
 
 dir_path_params = "/root/data/params"
 dir_path_dataset = "/root/data/dataset"
 dir_path_stats = "/root/data/stats"
 
-# 选择模型和数据集
 params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
 dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
 
 # %%
-# ==================== 辅助函数 ====================
+# ==================== 台风眼坐标配置 ====================
 
-def parse_file_parts(file_name):
-    return dict(part.split("-", 1) for part in file_name.split("_"))
+# 五个时间点的台风眼坐标 [纬度, 经度]
+# Date (UTC)  |  Lat      |  Lon      | Pressure (mb) | Wind (kt) | Category
+# ---------------------------------------------------------------------------
+# 01/01 00Z   | -21.2215  | 156.7095  |    997.0      |    40     |   TS
+# 01/01 06Z   | -21.7810  | 157.4565  |    996.0      |    40     |   TS
+# 01/01 12Z   | -22.5571  | 158.2946  |   1000.0      |    35     |   TS
+# 01/01 18Z   | -23.9132  | 158.8048  |    998.0      |    35     |   TS
+# 01/02 00Z   | -25.8306  | 159.0052  |    992.0      |    40     |   TS
+CYCLONE_CENTERS = [
+    {"time": "2022-01-01 00Z", "lat": -21.2215, "lon": 156.7095, "pressure": 997.0, "wind_speed": 40, "category": "TS"},
+    {"time": "2022-01-01 06Z", "lat": -21.7810, "lon": 157.4565, "pressure": 996.0, "wind_speed": 40, "category": "TS"},
+    {"time": "2022-01-01 12Z", "lat": -22.5571, "lon": 158.2946, "pressure": 1000.0, "wind_speed": 35, "category": "TS"},
+    {"time": "2022-01-01 18Z", "lat": -23.9132, "lon": 158.8048, "pressure": 998.0, "wind_speed": 35, "category": "TS"},
+    {"time": "2022-01-02 00Z", "lat": -25.8306, "lon": 159.0052, "pressure": 992.0, "wind_speed": 40, "category": "TS"},
+]
+
+# 数据网格分辨率
+GRID_RESOLUTION = 1.0  # 度
+
+# 可视化配置
+REGION_RADIUS = 15  # 裁剪半径 (度)
+
+# ==================== 梯度计算目标变量选择说明 ====================
+# TARGET_VARIABLE: 选择 'geopotential' (位势高度) 的原因：
+#
+# 1. **经典台风分析指标**: 500hPa 位势高度是气象学中分析中高层大气环流的标准层次
+#    - 该层位于对流层中层，对台风的引导气流和发展环境至关重要
+#
+# 2. **台风特征显著**: 台风在 500hPa 层表现为明显的低值系统
+#    - 台风中心处位势高度降低，形成"冷心"结构的一部分
+#    - 位势高度梯度反映台风的强度和结构
+#
+# 3. **物理意义明确**: 
+#    - 计算位势高度的梯度可识别哪些输入区域对台风预测影响最大
+#    - 负梯度 (NEGATIVE_GRADIENT=True) 表示关注导致位势高度降低的因素
+#    - 即：哪些上游区域的输入会导致台风中心位势高度下降（台风加强）
+#
+# 4. **与台风强度相关**: 500hPa 位势高度降低程度与台风强度正相关
+#
+# 5. **可解释性强**: 通过梯度热力图可以直观看到模型认为哪些区域的气象条件
+#    对台风中心的位势场预测贡献最大
+#
+# 其他可选变量:
+# - 'mean_sea_level_pressure': 海平面气压（台风的直接强度指标）
+# - 'temperature': 温度场（反映热力结构）
+# - '2m_temperature': 近地面温度（海温影响）
+# ============================================================================
+
+TARGET_VARIABLE = 'geopotential'  # 梯度计算的目标变量
+TARGET_LEVEL = 500  # 气压层 (hPa) - 对流层中层，台风引导气流的关键层次
+NEGATIVE_GRADIENT = True  # True: 关注导致位势高度降低的因素（台风加强相关）
 
 # %%
 # ==================== 加载模型 ====================
@@ -88,18 +143,15 @@ print("模型配置:", model_config)
 # ==================== 加载数据集 ====================
 
 print("正在加载数据集...")
-
-# 加载气象数据
 with open(f"{dir_path_dataset}/{dataset_file}", "rb") as f:
     example_batch = xarray.load_dataset(f).compute()
 
 print("数据维度:", example_batch.dims.mapping)
 
 # %%
-# ==================== 提取训练/评估数据 ====================
+# ==================== 提取训练数据 ====================
 
 train_steps = 1
-eval_steps = 1
 
 train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_forcings(
     example_batch,
@@ -107,15 +159,7 @@ train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_
     **dataclasses.asdict(task_config)
 )
 
-eval_inputs, eval_targets, eval_forcings = data_utils.extract_inputs_targets_forcings(
-    example_batch,
-    target_lead_times=slice("6h", f"{eval_steps*6}h"),
-    **dataclasses.asdict(task_config)
-)
-
 print("Train Inputs:", train_inputs.dims.mapping)
-print("Train Targets:", train_targets.dims.mapping)
-print("Train Forcings:", train_forcings.dims.mapping)
 
 # %%
 # ==================== 加载归一化统计数据 ====================
@@ -153,15 +197,6 @@ def run_forward(model_config, task_config, inputs, targets_template, forcings):
     return predictor(inputs, targets_template=targets_template, forcings=forcings)
 
 
-@hk.transform_with_state
-def loss_fn(model_config, task_config, inputs, targets, forcings):
-    predictor = construct_wrapped_graphcast(model_config, task_config)
-    loss, diagnostics = predictor.loss(inputs, targets, forcings)
-    return xarray_tree.map_structure(
-        lambda x: xarray_jax.unwrap_data(x.mean(), require_jax=True),
-        (loss, diagnostics))
-
-
 def with_configs(fn):
     return functools.partial(fn, model_config=model_config, task_config=task_config)
 
@@ -175,70 +210,28 @@ def drop_state(fn):
 
 
 # JIT 编译
-print("正在 JIT 编译模型（首次运行可能需要几分钟）...")
+print("正在 JIT 编译模型...")
 run_forward_jitted = drop_state(with_params(jax.jit(with_configs(run_forward.apply))))
 print("模型编译完成!")
 
 # %%
-# ==================== Saliency Map 配置 ====================
-
-# 台风中心真实坐标（台风 Seth）
-CYCLONE_CENTER_LAT = -21.7005  # 南纬 21.7005度
-CYCLONE_CENTER_LON = 157.5000  # 东经 157.5度
-
-# 数据网格分辨率
-GRID_RESOLUTION = 1.0  # 度
-
-# 使用 latlon_utils 动态计算目标点索引
-TARGET_LAT_IDX, TARGET_LON_IDX = latlon_to_index(
-    lat=CYCLONE_CENTER_LAT,
-    lon=CYCLONE_CENTER_LON,
-    resolution=GRID_RESOLUTION,
-    lat_min=-90.0,
-    lon_min=0.0
-)
-
-# 反向验证
-verified_lat, verified_lon = index_to_latlon(
-    lat_idx=TARGET_LAT_IDX,
-    lon_idx=TARGET_LON_IDX,
-    resolution=GRID_RESOLUTION,
-    lat_min=-90.0,
-    lon_min=0.0
-)
-
-# 目标变量配置
-TARGET_VARIABLE = 'geopotential'  # 位势高度
-TARGET_LEVEL = 500                 # 目标气压层 (hPa)
-TARGET_TIME_IDX = 0                # 预测的第几个时间步
-NEGATIVE_GRADIENT = True           # True: 关注导致值降低的因素
-
-print(f"\nSaliency Map 配置:")
-print(f"  台风中心真实坐标: ({CYCLONE_CENTER_LAT}°, {CYCLONE_CENTER_LON}°)")
-print(f"  网格分辨率: {GRID_RESOLUTION}°")
-print(f"  目标点索引: (lat_idx={TARGET_LAT_IDX}, lon_idx={TARGET_LON_IDX})")
-print(f"  验证坐标: ({verified_lat:.4f}°, {verified_lon:.4f}°)")
-print(f"  目标变量: {TARGET_VARIABLE} @ {TARGET_LEVEL} hPa")
-print(f"  负梯度模式: {NEGATIVE_GRADIENT}")
-
-# %%
-# ==================== 计算 Saliency Map ====================
+# ==================== 梯度计算函数 ====================
 
 def compute_saliency_map(
     inputs,
     targets,
     forcings,
-    target_idx,
-    target_variable='geopotential',
-    target_level=500,
-    target_time_idx=0,
-    negative=True
+    target_idx: Tuple[int, int],
+    target_variable: str = 'geopotential',
+    target_level: int = 500,
+    target_time_idx: int = 0,
+    negative: bool = True
 ):
     """
     计算 GraphCast 输入梯度 (Saliency Map)
-
+    
     Args:
-        inputs: 输入数据 (xarray.Dataset)
+        inputs: 输入数据
         targets: 目标模板
         forcings: 强迫项数据
         target_idx: 目标点索引 (lat_idx, lon_idx)
@@ -246,14 +239,13 @@ def compute_saliency_map(
         target_level: 目标气压层 (hPa)
         target_time_idx: 预测时间步索引
         negative: True则返回负梯度
-
+    
     Returns:
-        grads: 输入梯度 (xarray.Dataset)
+        grads: 输入梯度
     """
     lat_idx, lon_idx = target_idx
 
     def target_loss(inputs_data):
-        # 运行模型前向传播
         outputs = run_forward_jitted(
             rng=jax.random.PRNGKey(0),
             inputs=inputs_data,
@@ -261,10 +253,8 @@ def compute_saliency_map(
             forcings=forcings
         )
 
-        # 提取目标变量
         target_data = outputs[target_variable]
 
-        # 索引到目标点
         if 'level' in target_data.dims:
             value = target_data.sel(level=target_level).isel(
                 time=target_time_idx, lat=lat_idx, lon=lon_idx
@@ -274,659 +264,236 @@ def compute_saliency_map(
                 time=target_time_idx, lat=lat_idx, lon=lon_idx
             )
 
-        # 处理 batch 维度
         if 'batch' in value.dims:
             value = value.isel(batch=0)
 
-        # 提取 JAX 数组并返回标量
         scalar = xarray_jax.unwrap_data(value, require_jax=True)
         scalar = jnp.squeeze(scalar)
 
         return -scalar if negative else scalar
 
-    # 计算梯度
     grads = jax.grad(target_loss)(inputs)
     return grads
 
 
-print("\n开始计算 Saliency Map...")
-print("（首次运行需要 JIT 编译，请耐心等待）")
-
-saliency_grads = compute_saliency_map(
-    inputs=train_inputs,
-    targets=train_targets,
-    forcings=train_forcings,
-    target_idx=(TARGET_LAT_IDX, TARGET_LON_IDX),
-    target_variable=TARGET_VARIABLE,
-    target_level=TARGET_LEVEL,
-    target_time_idx=TARGET_TIME_IDX,
-    negative=NEGATIVE_GRADIENT
-)
-
-print("\n✓ Saliency Map 计算完成!")
-
 # %%
-# ==================== 梯度统计分析 ====================
+# ==================== 物理-AI对齐可视化函数 ====================
 
-print("=" * 60)
-print("各变量梯度统计信息")
-print("=" * 60)
-
-for var_name in saliency_grads.data_vars:
-    grad_data = xarray_jax.unwrap_data(saliency_grads[var_name])
+def plot_physics_ai_alignment(
+    cyclone_info: dict,
+    gradients,
+    era5_data,
+    gradient_var: str = '2m_temperature',
+    save_path: Optional[str] = None
+):
+    """
+    绘制物理-AI对齐分析图
+    
+    Args:
+        cyclone_info: 台风信息字典 {time, lat, lon, intensity}
+        gradients: 梯度数据 (xarray Dataset)
+        era5_data: ERA5 气象数据
+        gradient_var: 用于可视化的梯度变量
+        save_path: 保存路径
+    """
+    target_lat = cyclone_info['lat']
+    target_lon = cyclone_info['lon']
+    time_label = cyclone_info['time']
+    
+    print(f"\n绘制 {time_label} 的物理-AI对齐分析图...")
+    
+    # 1. 提取梯度数据
+    grad_data = gradients[gradient_var]
+    if 'batch' in grad_data.dims:
+        grad_data = grad_data.isel(batch=0)
+    if 'time' in grad_data.dims:
+        grad_data = grad_data.isel(time=0)
+    
+    grad_data = xarray_jax.unwrap_data(grad_data)
     if hasattr(grad_data, 'block_until_ready'):
         grad_data.block_until_ready()
-    grad_data = np.array(grad_data)
-
-    print(f"\n{var_name}:")
-    print(f"  形状: {grad_data.shape}")
-    print(f"  最大值: {grad_data.max():.6e}")
-    print(f"  最小值: {grad_data.min():.6e}")
-    print(f"  绝对值均值: {np.abs(grad_data).mean():.6e}")
-
-# %%
-# ==================== 坐标转换辅助函数 ====================
-
-def idx_to_lat(lat_idx, resolution=1.0):
-    """将纬度索引转换为真实纬度"""
-    return lat_idx * resolution - 90.0
-
-def idx_to_lon(lon_idx, resolution=1.0):
-    """将经度索引转换为真实经度"""
-    return lon_idx * resolution
-
-def format_lat(lat):
-    """格式化纬度显示"""
-    if lat >= 0:
-        return f"{lat:.0f}°N"
-    else:
-        return f"{-lat:.0f}°S"
-
-def format_lon(lon):
-    """格式化经度显示"""
-    if lon >= 0:
-        return f"{lon:.0f}°E"
-    else:
-        return f"{-lon:.0f}°W"
-
-# %%
-# ==================== 可视化函数 ====================
-
-def visualize_saliency(
-    grads,
-    var_name,
-    level_idx=None,
-    time_idx=0,
-    robust=True,
-    target_lat_idx=TARGET_LAT_IDX,
-    target_lon_idx=TARGET_LON_IDX,
-    save_path=None,
-    resolution=1.0
-):
-    """
-    可视化指定变量的 Saliency Map
-
-    Args:
-        grads: 梯度数据
-        var_name: 变量名
-        level_idx: 气压层索引（对于3D变量）
-        time_idx: 时间步索引
-        robust: 是否使用百分位数设置颜色范围
-        target_lat_idx: 目标点纬度索引
-        target_lon_idx: 目标点经度索引
-        save_path: 保存路径（可选）
-        resolution: 网格分辨率（度），默认1.0
-    """
-    grad_var = grads[var_name]
-
-    if 'time' in grad_var.dims:
-        grad_var = grad_var.isel(time=time_idx)
-
-    if 'level' in grad_var.dims:
-        if level_idx is not None:
-            grad_var = grad_var.isel(level=level_idx)
-            level_info = f" (level={level_idx})"
-        else:
-            grad_var = grad_var.isel(level=0)
-            level_info = " (level=0)"
-    else:
-        level_info = ""
-
-    if 'batch' in grad_var.dims:
-        grad_var = grad_var.isel(batch=0)
-
-    # 获取数据
-    data = xarray_jax.unwrap_data(grad_var)
-    if hasattr(data, 'block_until_ready'):
-        data.block_until_ready()
-    data = np.array(data)
-
-    # 绘图
-    fig, ax = plt.subplots(figsize=(14, 8))
-
-    # 使用百分位数设置颜色范围（解决极端值问题）
-    if robust:
-        vmin_pct = np.percentile(data, 2)
-        vmax_pct = np.percentile(data, 98)
-        vabs = max(abs(vmin_pct), abs(vmax_pct))
-        vmin, vmax = -vabs, vabs
-    else:
-        vmax = np.abs(data).max()
-        vmin = -vmax
-
-    if vmax == 0:
-        vmax = 1
-        vmin = -1
-
-    im = ax.imshow(data, origin='lower', cmap='RdBu_r', vmin=vmin, vmax=vmax)
-    plt.colorbar(im, ax=ax, label='Gradient', shrink=0.8)
-
-    # 标记目标点
-    ax.scatter(target_lon_idx, target_lat_idx, c='lime', s=300, marker='*',
-               edgecolors='black', linewidths=2, zorder=5,
-               label=f'Target: ({target_lat_idx}, {target_lon_idx})')
-
-    ax.set_title(f'Saliency Map: {var_name}{level_info} (robust={robust})', fontsize=14)
-    ax.set_xlabel('Longitude Index')
-    ax.set_ylabel('Latitude Index')
-    ax.legend(loc='upper right')
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"图像已保存: {save_path}")
-
-    plt.show()
-    return data
-
-
-def visualize_saliency_log(
-    grads,
-    var_name,
-    level_idx=None,
-    time_idx=0,
-    scale_factor=1e6,
-    target_lat_idx=TARGET_LAT_IDX,
-    target_lon_idx=TARGET_LON_IDX,
-    save_path=None
-):
-    """
-    使用对数缩放可视化 Saliency Map（适用于跨多个数量级的梯度）
-    """
-    grad_var = grads[var_name]
-
-    if 'time' in grad_var.dims:
-        grad_var = grad_var.isel(time=time_idx)
-
-    if 'level' in grad_var.dims:
-        if level_idx is not None:
-            grad_var = grad_var.isel(level=level_idx)
-            level_info = f" (level={level_idx})"
-        else:
-            grad_var = grad_var.isel(level=0)
-            level_info = " (level=0)"
-    else:
-        level_info = ""
-
-    if 'batch' in grad_var.dims:
-        grad_var = grad_var.isel(batch=0)
-
-    # 获取数据
-    data = xarray_jax.unwrap_data(grad_var)
-    if hasattr(data, 'block_until_ready'):
-        data.block_until_ready()
-    data = np.array(data)
-
-    # 对数缩放
-    data_sign = np.sign(data)
-    data_log = data_sign * np.log1p(np.abs(data) * scale_factor)
-
-    # 绘图
-    fig, ax = plt.subplots(figsize=(14, 8))
-
-    vmax = np.abs(data_log).max()
-    if vmax == 0:
-        vmax = 1
-
-    im = ax.imshow(data_log, origin='lower', cmap='RdBu_r', vmin=-vmax, vmax=vmax)
-    plt.colorbar(im, ax=ax, label='Log Gradient', shrink=0.8)
-
-    # 标记目标点
-    ax.scatter(target_lon_idx, target_lat_idx, c='lime', s=300, marker='*',
-               edgecolors='black', linewidths=2, zorder=5,
-               label=f'Target: ({target_lat_idx}, {target_lon_idx})')
-
-    ax.set_title(f'Saliency Map (Log Scale): {var_name}{level_info}', fontsize=14)
-    ax.set_xlabel('Longitude Index')
-    ax.set_ylabel('Latitude Index')
-    ax.legend(loc='upper right')
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"图像已保存: {save_path}")
-
-    plt.show()
-    return data
-
-# %%
-# ==================== 局部区域裁剪与可视化 ====================
-
-def visualize_local_saliency(
-    grads,
-    var_name,
-    target_lat_idx,
-    target_lon_idx,
-    radius=50,
-    level_idx=None,
-    time_idx=0,
-    robust=True,
-    save_path=None
-):
-    """
-    可视化目标点周围局部区域的 Saliency Map（裁剪后的热力图）
-
-    Args:
-        grads: 梯度数据
-        var_name: 变量名
-        target_lat_idx: 目标点纬度索引
-        target_lon_idx: 目标点经度索引
-        radius: 裁剪半径（网格数），默认 50
-        level_idx: 气压层索引（对于3D变量）
-        time_idx: 时间步索引
-        robust: 是否使用百分位数设置颜色范围
-        save_path: 保存路径（可选）
-    """
-    grad_var = grads[var_name]
-
-    if 'time' in grad_var.dims:
-        grad_var = grad_var.isel(time=time_idx)
-
-    if 'level' in grad_var.dims:
-        if level_idx is not None:
-            grad_var = grad_var.isel(level=level_idx)
-            level_info = f" @ level={level_idx}"
-        else:
-            grad_var = grad_var.isel(level=0)
-            level_info = " @ level=0"
-    else:
-        level_info = ""
-
-    if 'batch' in grad_var.dims:
-        grad_var = grad_var.isel(batch=0)
-
-    # 获取数据
-    data = xarray_jax.unwrap_data(grad_var)
-    if hasattr(data, 'block_until_ready'):
-        data.block_until_ready()
-    data = np.array(data)
-
-    # 获取数据形状
-    lat_size, lon_size = data.shape
-
-    # 计算裁剪范围
-    lat_min = max(0, target_lat_idx - radius)
-    lat_max = min(lat_size, target_lat_idx + radius + 1)
-    lon_min = max(0, target_lon_idx - radius)
-    lon_max = min(lon_size, target_lon_idx + radius + 1)
-
-    # 裁剪数据
-    data_cropped = data[lat_min:lat_max, lon_min:lon_max]
-
-    # 计算目标点在裁剪后数据中的位置
-    target_lat_cropped = target_lat_idx - lat_min
-    target_lon_cropped = target_lon_idx - lon_min
-
-    print(f"\n裁剪信息:")
-    print(f"  变量: {var_name}{level_info}")
-    print(f"  原始数据形状: {data.shape}")
-    print(f"  裁剪范围: lat=[{lat_min}:{lat_max}], lon=[{lon_min}:{lon_max}]")
-    print(f"  裁剪后形状: {data_cropped.shape}")
-    print(f"  目标点在裁剪数据中的位置: ({target_lat_cropped}, {target_lon_cropped})")
-
-    # 绘制热力图
-    fig, ax = plt.subplots(figsize=(12, 10))
-
-    # 使用百分位数设置颜色范围（解决极端值问题）
-    if robust:
-        vmin_pct = np.percentile(data_cropped, 2)
-        vmax_pct = np.percentile(data_cropped, 98)
-        vabs = max(abs(vmin_pct), abs(vmax_pct))
-        vmin, vmax = -vabs, vabs
-    else:
-        vmax = np.abs(data_cropped).max()
-        vmin = -vmax
-
-    if vmax == 0:
-        vmax = 1
-        vmin = -1
-
-    im = ax.imshow(data_cropped, origin='lower', cmap='RdBu_r', 
-                   vmin=vmin, vmax=vmax, aspect='auto')
+    grad_np = np.array(grad_data)
     
-    cbar = plt.colorbar(im, ax=ax, label='Gradient', shrink=0.8)
-
-    # 标记目标点（台风中心）
-    ax.scatter(target_lon_cropped, target_lat_cropped, 
-               c='lime', s=400, marker='*',
-               edgecolors='black', linewidths=2.5, zorder=5,
-               label=f'Target Center')
-
-    # 添加网格线
-    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
-
-    # 设置刻度标签（显示索引和真实经纬度）
-    n_ticks = 5
-    lat_tick_indices = np.linspace(0, data_cropped.shape[0]-1, n_ticks, dtype=int)
-    lon_tick_indices = np.linspace(0, data_cropped.shape[1]-1, n_ticks, dtype=int)
+    # 2. 提取气压场数据
+    if 'mean_sea_level_pressure' in era5_data.data_vars:
+        pressure_data = era5_data['mean_sea_level_pressure']
+    else:
+        # 如果没有海平面气压,使用其他变量替代
+        pressure_data = None
     
-    # 计算对应的真实经纬度
-    resolution = 1.0
-    lat_labels = []
-    for i in lat_tick_indices:
-        idx = lat_min + i
-        lat = idx_to_lat(idx, resolution)
-        lat_labels.append(f'{idx}\n{format_lat(lat)}')
+    # 3. 提取风场数据
+    u_wind = era5_data['10m_u_component_of_wind']
+    v_wind = era5_data['10m_v_component_of_wind']
     
-    lon_labels = []
-    for i in lon_tick_indices:
-        idx = lon_min + i
-        lon = idx_to_lon(idx, resolution)
-        lon_labels.append(f'{idx}\n{format_lon(lon)}')
+    if 'batch' in u_wind.dims:
+        u_wind = u_wind.isel(batch=0)
+        v_wind = v_wind.isel(batch=0)
+    if 'time' in u_wind.dims:
+        u_wind = u_wind.isel(time=0)
+        v_wind = v_wind.isel(time=0)
     
-    ax.set_yticks(lat_tick_indices)
-    ax.set_yticklabels(lat_labels)
-    ax.set_xticks(lon_tick_indices)
-    ax.set_xticklabels(lon_labels)
-
-    ax.set_title(f'局部 Saliency Map: {var_name}{level_info}\n'
-                 f'(目标点: lat={target_lat_idx}, lon={target_lon_idx}, 半径=±{radius} 网格)', 
-                 fontsize=13, fontweight='bold')
-    ax.set_xlabel('Longitude Index (经度)', fontsize=11)
-    ax.set_ylabel('Latitude Index (纬度)', fontsize=11)
-    ax.legend(loc='upper right', fontsize=10)
+    # 4. 裁剪到目标区域
+    grad_region, lat_range, lon_range = extract_region_data(
+        xarray.DataArray(grad_np, coords=gradients[gradient_var].coords[:2], dims=['lat', 'lon']),
+        target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION
+    )
+    
+    if pressure_data is not None:
+        pressure_region, _, _ = extract_region_data(
+            pressure_data, target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION
+        )
+    
+    u_region, _, _ = extract_region_data(u_wind, target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION)
+    v_region, _, _ = extract_region_data(v_wind, target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION)
+    
+    # 5. 获取台风眼处的风速
+    u_center = float(u_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
+    v_center = float(v_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
+    
+    # 6. 创建地图
+    fig = plt.figure(figsize=(14, 12))
+    ax = plt.axes(projection=ccrs.PlateCarree())
+    
+    # 设置地图范围
+    ax.set_extent([lon_range[0], lon_range[1], lat_range[0], lat_range[1]], crs=ccrs.PlateCarree())
+    
+    # 添加地理要素
+    ax.coastlines(resolution='50m', linewidth=1.2, color='black')
+    ax.add_feature(cfeature.BORDERS, linewidth=0.8, edgecolor='gray')
+    ax.add_feature(cfeature.LAND, facecolor='lightgray', alpha=0.3)
+    
+    # 添加经纬度网格
+    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color='gray', alpha=0.5, linestyle='--')
+    gl.top_labels = False
+    gl.right_labels = False
+    
+    # 7. 绘制等压线 (如果有)
+    if pressure_data is not None:
+        lats = pressure_region.lat.values
+        lons = pressure_region.lon.values
+        pressure_vals = pressure_region.values / 100  # 转换为 hPa
+        
+        contour_levels = np.arange(np.floor(pressure_vals.min()), np.ceil(pressure_vals.max()), 2)
+        cs = ax.contour(lons, lats, pressure_vals, levels=contour_levels, 
+                       colors='blue', linewidths=1.5, alpha=0.7, transform=ccrs.PlateCarree())
+        ax.clabel(cs, inline=True, fontsize=9, fmt='%d hPa')
+    
+    # 8. 叠加梯度热力图
+    lats_grad = grad_region.lat.values
+    lons_grad = grad_region.lon.values
+    grad_vals = grad_region.values
+    
+    # 使用 robust 百分位数设置颜色范围
+    vmin_pct = np.percentile(grad_vals, 2)
+    vmax_pct = np.percentile(grad_vals, 98)
+    vabs = max(abs(vmin_pct), abs(vmax_pct))
+    
+    im = ax.imshow(grad_vals, extent=[lons_grad.min(), lons_grad.max(), 
+                                      lats_grad.min(), lats_grad.max()],
+                   origin='lower', cmap='RdBu_r', vmin=-vabs, vmax=vabs,
+                   alpha=0.6, transform=ccrs.PlateCarree(), zorder=2)
+    
+    cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, shrink=0.8)
+    cbar.set_label(f'{gradient_var} Gradient (AI Saliency)', fontsize=11)
+    
+    # 9. 绘制台风眼标记
+    ax.scatter(target_lon, target_lat, marker='x', s=400, c='red', 
+              linewidths=4, transform=ccrs.PlateCarree(), zorder=5,
+              label='Cyclone Center')
+    
+    # 10. 绘制逆风向量箭头 (指向上游)
+    # 箭头指向 (-u, -v)
+    arrow_scale = 2.0  # 调整箭头长度
+    ax.arrow(target_lon, target_lat, -u_center * arrow_scale, -v_center * arrow_scale,
+             head_width=0.8, head_length=1.2, fc='yellow', ec='black', 
+             linewidth=2.5, transform=ccrs.PlateCarree(), zorder=6,
+             label=f'Upwind Direction (−u,−v)')
+    
+    # 11. 添加标题和图例
+    pressure_info = f"{cyclone_info['pressure']} mb" if 'pressure' in cyclone_info else ""
+    wind_info = f"{cyclone_info['wind_speed']} kt" if 'wind_speed' in cyclone_info else cyclone_info.get('intensity', '')
+    category_info = cyclone_info.get('category', '')
+    
+    title_parts = [time_label]
+    if pressure_info:
+        title_parts.append(pressure_info)
+    if wind_info:
+        title_parts.append(wind_info)
+    if category_info:
+        title_parts.append(category_info)
+    
+    ax.set_title(f'物理-AI对齐分析图\n{" | ".join(title_parts)}\n'
+                f'位置: ({target_lat:.2f}°, {target_lon:.2f}°)',
+                fontsize=14, fontweight='bold', pad=15)
+    
+    # 创建自定义图例
+    legend_elements = [
+        mpatches.Patch(facecolor='none', edgecolor='blue', linewidth=1.5, 
+                      label='等压线 (MSLP)'),
+        mpatches.Patch(facecolor='red', alpha=0.6, label='梯度热力图 (AI)'),
+        plt.Line2D([0], [0], marker='x', color='w', markerfacecolor='red', 
+                  markersize=15, markeredgewidth=3, label='台风中心'),
+        plt.Line2D([0], [0], marker='>', color='yellow', markerfacecolor='yellow',
+                  markersize=12, markeredgecolor='black', markeredgewidth=1.5,
+                  label=f'逆风方向 ({-u_center:.1f}, {-v_center:.1f} m/s)')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=10, framealpha=0.9)
     
     plt.tight_layout()
-
+    
     if save_path:
         plt.savefig(save_path, dpi=200, bbox_inches='tight')
         print(f"✓ 图像已保存: {save_path}")
-
+    
     plt.show()
-    
-    return data_cropped
 
 
 # %%
-# ==================== 可视化 Saliency Map ====================
+# ==================== 主流程: 为5个时间点生成对齐分析图 ====================
 
-print("\n【温度场梯度 - Robust 缩放】")
-if 'temperature' in saliency_grads.data_vars:
-    visualize_saliency(saliency_grads, 'temperature', level_idx=5, robust=True)
+print("\n" + "=" * 70)
+print("开始生成物理-AI对齐分析图")
+print("=" * 70)
 
-print("\n【位势场梯度 - Robust 缩放】")
-if 'geopotential' in saliency_grads.data_vars:
-    visualize_saliency(saliency_grads, 'geopotential', level_idx=5, robust=True)
-
-print("\n【2米温度梯度 - Robust 缩放】")
-if '2m_temperature' in saliency_grads.data_vars:
-    visualize_saliency(saliency_grads, '2m_temperature', robust=True)
-
-# %%
-# ==================== 局部区域热力图可视化 ====================
-
-print("\n" + "=" * 60)
-print("局部区域热力图可视化 (±50 网格)")
-print("=" * 60)
-
-# 可视化温度场局部梯度
-print("\n【温度场 - 局部区域热力图】")
-if 'temperature' in saliency_grads.data_vars:
-    local_temp_grads = visualize_local_saliency(
-        grads=saliency_grads,
-        var_name='temperature',
-        target_lat_idx=TARGET_LAT_IDX,
-        target_lon_idx=TARGET_LON_IDX,
-        radius=50,
-        level_idx=5,
-        robust=True,
-        save_path='saliency_local_temperature.png'
+for idx, cyclone in enumerate(CYCLONE_CENTERS):
+    print(f"\n【{idx + 1}/{len(CYCLONE_CENTERS)}】处理时间点: {cyclone['time']}")
+    
+    # 计算目标点索引
+    target_lat_idx, target_lon_idx = latlon_to_index(
+        lat=cyclone['lat'],
+        lon=cyclone['lon'],
+        resolution=GRID_RESOLUTION,
+        lat_min=-90.0,
+        lon_min=0.0
+    )
+    
+    print(f"  台风眼坐标: ({cyclone['lat']:.4f}°, {cyclone['lon']:.4f}°)")
+    print(f"  网格索引: (lat_idx={target_lat_idx}, lon_idx={target_lon_idx})")
+    
+    # 计算梯度
+    print("  计算梯度...")
+    saliency_grads = compute_saliency_map(
+        inputs=train_inputs,
+        targets=train_targets,
+        forcings=train_forcings,
+        target_idx=(target_lat_idx, target_lon_idx),
+        target_variable=TARGET_VARIABLE,
+        target_level=TARGET_LEVEL,
+        target_time_idx=0,
+        negative=NEGATIVE_GRADIENT
+    )
+    
+    # 生成可视化
+    save_filename = f"physics_ai_alignment_{idx:02d}_{cyclone['time'].replace(' ', '_').replace(':', '')}.png"
+    
+    plot_physics_ai_alignment(
+        cyclone_info=cyclone,
+        gradients=saliency_grads,
+        era5_data=train_inputs,
+        gradient_var='2m_temperature',  # 可选: 'geopotential', 'temperature', etc.
+        save_path=save_filename
     )
 
-# 可视化位势场局部梯度
-print("\n【位势场 - 局部区域热力图】")
-if 'geopotential' in saliency_grads.data_vars:
-    local_geo_grads = visualize_local_saliency(
-        grads=saliency_grads,
-        var_name='geopotential',
-        target_lat_idx=TARGET_LAT_IDX,
-        target_lon_idx=TARGET_LON_IDX,
-        radius=50,
-        level_idx=5,
-        robust=True,
-        save_path='saliency_local_geopotential.png'
-    )
-
-# 可视化2米温度局部梯度
-print("\n【2米温度 - 局部区域热力图】")
-if '2m_temperature' in saliency_grads.data_vars:
-    local_2m_temp_grads = visualize_local_saliency(
-        grads=saliency_grads,
-        var_name='2m_temperature',
-        target_lat_idx=TARGET_LAT_IDX,
-        target_lon_idx=TARGET_LON_IDX,
-        radius=50,
-        robust=True,
-        save_path='saliency_local_2m_temperature.png'
-    )
-
-# %%
-# ==================== 局部区域对数缩放可视化函数 ====================
-
-def visualize_local_saliency_log(
-    grads,
-    var_name,
-    target_lat_idx,
-    target_lon_idx,
-    radius=50,
-    level_idx=None,
-    time_idx=0,
-    scale_factor=1e6,
-    save_path=None
-):
-    """
-    使用对数缩放可视化目标点周围局部区域的 Saliency Map
-    
-    Args:
-        grads: 梯度数据
-        var_name: 变量名
-        target_lat_idx: 目标点纬度索引
-        target_lon_idx: 目标点经度索引
-        radius: 裁剪半径（网格数），默认 50
-        level_idx: 气压层索引（对于3D变量）
-        time_idx: 时间步索引
-        scale_factor: 对数缩放因子，默认 1e6
-        save_path: 保存路径（可选）
-    """
-    grad_var = grads[var_name]
-
-    if 'time' in grad_var.dims:
-        grad_var = grad_var.isel(time=time_idx)
-
-    if 'level' in grad_var.dims:
-        if level_idx is not None:
-            grad_var = grad_var.isel(level=level_idx)
-            level_info = f" @ level={level_idx}"
-        else:
-            grad_var = grad_var.isel(level=0)
-            level_info = " @ level=0"
-    else:
-        level_info = ""
-
-    if 'batch' in grad_var.dims:
-        grad_var = grad_var.isel(batch=0)
-
-    # 获取数据
-    data = xarray_jax.unwrap_data(grad_var)
-    if hasattr(data, 'block_until_ready'):
-        data.block_until_ready()
-    data = np.array(data)
-
-    # 获取数据形状
-    lat_size, lon_size = data.shape
-
-    # 计算裁剪范围
-    lat_min = max(0, target_lat_idx - radius)
-    lat_max = min(lat_size, target_lat_idx + radius + 1)
-    lon_min = max(0, target_lon_idx - radius)
-    lon_max = min(lon_size, target_lon_idx + radius + 1)
-
-    # 裁剪数据
-    data_cropped = data[lat_min:lat_max, lon_min:lon_max]
-
-    # 计算目标点在裁剪后数据中的位置
-    target_lat_cropped = target_lat_idx - lat_min
-    target_lon_cropped = target_lon_idx - lon_min
-
-    # 对数缩放
-    data_sign = np.sign(data_cropped)
-    data_log = data_sign * np.log1p(np.abs(data_cropped) * scale_factor)
-
-    print(f"\n裁剪信息 (对数缩放):")
-    print(f"  变量: {var_name}{level_info}")
-    print(f"  原始数据形状: {data.shape}")
-    print(f"  裁剪范围: lat=[{lat_min}:{lat_max}], lon=[{lon_min}:{lon_max}]")
-    print(f"  裁剪后形状: {data_cropped.shape}")
-    print(f"  目标点在裁剪数据中的位置: ({target_lat_cropped}, {target_lon_cropped})")
-    print(f"  对数缩放因子: {scale_factor}")
-
-    # 绘制热力图
-    fig, ax = plt.subplots(figsize=(12, 10))
-
-    vmax = np.abs(data_log).max()
-    if vmax == 0:
-        vmax = 1
-
-    im = ax.imshow(data_log, origin='lower', cmap='RdBu_r', 
-                   vmin=-vmax, vmax=vmax, aspect='auto')
-    
-    cbar = plt.colorbar(im, ax=ax, label='Log Gradient', shrink=0.8)
-
-    # 标记目标点（台风中心）
-    ax.scatter(target_lon_cropped, target_lat_cropped, 
-               c='lime', s=400, marker='*',
-               edgecolors='black', linewidths=2.5, zorder=5,
-               label=f'Target Center')
-
-    # 添加网格线
-    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
-
-    # 设置刻度标签（显示索引和真实经纬度）
-    n_ticks = 5
-    lat_tick_indices = np.linspace(0, data_cropped.shape[0]-1, n_ticks, dtype=int)
-    lon_tick_indices = np.linspace(0, data_cropped.shape[1]-1, n_ticks, dtype=int)
-    
-    # 计算对应的真实经纬度
-    resolution = 1.0
-    lat_labels = []
-    for i in lat_tick_indices:
-        idx = lat_min + i
-        lat = idx_to_lat(idx, resolution)
-        lat_labels.append(f'{idx}\n{format_lat(lat)}')
-    
-    lon_labels = []
-    for i in lon_tick_indices:
-        idx = lon_min + i
-        lon = idx_to_lon(idx, resolution)
-        lon_labels.append(f'{idx}\n{format_lon(lon)}')
-    
-    ax.set_yticks(lat_tick_indices)
-    ax.set_yticklabels(lat_labels)
-    ax.set_xticks(lon_tick_indices)
-    ax.set_xticklabels(lon_labels)
-
-    ax.set_title(f'局部 Saliency Map (Log Scale): {var_name}{level_info}\n'
-                 f'(目标点: lat={target_lat_idx}, lon={target_lon_idx}, 半径=±{radius} 网格)', 
-                 fontsize=13, fontweight='bold')
-    ax.set_xlabel('Longitude Index (经度)', fontsize=11)
-    ax.set_ylabel('Latitude Index (纬度)', fontsize=11)
-    ax.legend(loc='upper right', fontsize=10)
-    
-    plt.tight_layout()
-
-    if save_path:
-        plt.savefig(save_path, dpi=200, bbox_inches='tight')
-        print(f"✓ 图像已保存: {save_path}")
-
-    plt.show()
-    
-    return data_cropped
-
-
-# %%
-# ==================== 对数缩放可视化（可选）====================
-
-print("\n【温度场梯度 - 对数缩放】")
-if 'temperature' in saliency_grads.data_vars:
-    visualize_saliency_log(saliency_grads, 'temperature', level_idx=5)
-
-# %%
-# ==================== 局部区域对数缩放热力图可视化 ====================
-
-print("\n" + "=" * 60)
-print("局部区域对数缩放热力图可视化 (±50 网格)")
-print("=" * 60)
-
-# 可视化温度场局部梯度（对数缩放）
-print("\n【温度场 - 局部对数缩放热力图】")
-if 'temperature' in saliency_grads.data_vars:
-    local_temp_grads_log = visualize_local_saliency_log(
-        grads=saliency_grads,
-        var_name='temperature',
-        target_lat_idx=TARGET_LAT_IDX,
-        target_lon_idx=TARGET_LON_IDX,
-        radius=50,
-        level_idx=5,
-        scale_factor=1e6,
-        save_path='saliency_local_temperature_log.png'
-    )
-
-# 可视化位势场局部梯度（对数缩放）
-print("\n【位势场 - 局部对数缩放热力图】")
-if 'geopotential' in saliency_grads.data_vars:
-    local_geo_grads_log = visualize_local_saliency_log(
-        grads=saliency_grads,
-        var_name='geopotential',
-        target_lat_idx=TARGET_LAT_IDX,
-        target_lon_idx=TARGET_LON_IDX,
-        radius=50,
-        level_idx=5,
-        scale_factor=1e6,
-        save_path='saliency_local_geopotential_log.png'
-    )
-
-# 可视化2米温度局部梯度（对数缩放）
-print("\n【2米温度 - 局部对数缩放热力图】")
-if '2m_temperature' in saliency_grads.data_vars:
-    local_2m_temp_grads_log = visualize_local_saliency_log(
-        grads=saliency_grads,
-        var_name='2m_temperature',
-        target_lat_idx=TARGET_LAT_IDX,
-        target_lon_idx=TARGET_LON_IDX,
-        radius=50,
-        scale_factor=1e6,
-        save_path='saliency_local_2m_temperature_log.png'
-    )
-
-# %%
-# ==================== 保存结果（可选）====================
-
-import pickle
-
-# 保存梯度数据
-# with open('saliency_grads.pkl', 'wb') as f:
-#     pickle.dump(saliency_grads, f)
-# print("梯度数据已保存到 saliency_grads.pkl")
-
-print("\n脚本执行完成!")
-print("\n提示: 局部区域热力图已生成，展示了目标点周围 ±50 个网格的梯度分布。")
+print("\n" + "=" * 70)
+print("✓ 所有物理-AI对齐分析图生成完成!")
+print("=" * 70)
