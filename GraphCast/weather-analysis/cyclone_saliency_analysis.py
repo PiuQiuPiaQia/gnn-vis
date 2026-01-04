@@ -296,6 +296,31 @@ for var_name in saliency_grads.data_vars:
     print(f"  绝对值均值: {np.abs(grad_data).mean():.6e}")
 
 # %%
+# ==================== 坐标转换辅助函数 ====================
+
+def idx_to_lat(lat_idx, resolution=1.0):
+    """将纬度索引转换为真实纬度"""
+    return lat_idx * resolution - 90.0
+
+def idx_to_lon(lon_idx, resolution=1.0):
+    """将经度索引转换为真实经度"""
+    return lon_idx * resolution
+
+def format_lat(lat):
+    """格式化纬度显示"""
+    if lat >= 0:
+        return f"{lat:.0f}°N"
+    else:
+        return f"{-lat:.0f}°S"
+
+def format_lon(lon):
+    """格式化经度显示"""
+    if lon >= 0:
+        return f"{lon:.0f}°E"
+    else:
+        return f"{-lon:.0f}°W"
+
+# %%
 # ==================== 可视化函数 ====================
 
 def visualize_saliency(
@@ -306,7 +331,8 @@ def visualize_saliency(
     robust=True,
     target_lat_idx=TARGET_LAT_IDX,
     target_lon_idx=TARGET_LON_IDX,
-    save_path=None
+    save_path=None,
+    resolution=1.0
 ):
     """
     可视化指定变量的 Saliency Map
@@ -320,6 +346,7 @@ def visualize_saliency(
         target_lat_idx: 目标点纬度索引
         target_lon_idx: 目标点经度索引
         save_path: 保存路径（可选）
+        resolution: 网格分辨率（度），默认1.0
     """
     grad_var = grads[var_name]
 
@@ -454,6 +481,154 @@ def visualize_saliency_log(
     return data
 
 # %%
+# ==================== 局部区域裁剪与可视化 ====================
+
+def visualize_local_saliency(
+    grads,
+    var_name,
+    target_lat_idx,
+    target_lon_idx,
+    radius=50,
+    level_idx=None,
+    time_idx=0,
+    robust=True,
+    save_path=None
+):
+    """
+    可视化目标点周围局部区域的 Saliency Map（裁剪后的热力图）
+
+    Args:
+        grads: 梯度数据
+        var_name: 变量名
+        target_lat_idx: 目标点纬度索引
+        target_lon_idx: 目标点经度索引
+        radius: 裁剪半径（网格数），默认 50
+        level_idx: 气压层索引（对于3D变量）
+        time_idx: 时间步索引
+        robust: 是否使用百分位数设置颜色范围
+        save_path: 保存路径（可选）
+    """
+    grad_var = grads[var_name]
+
+    if 'time' in grad_var.dims:
+        grad_var = grad_var.isel(time=time_idx)
+
+    if 'level' in grad_var.dims:
+        if level_idx is not None:
+            grad_var = grad_var.isel(level=level_idx)
+            level_info = f" @ level={level_idx}"
+        else:
+            grad_var = grad_var.isel(level=0)
+            level_info = " @ level=0"
+    else:
+        level_info = ""
+
+    if 'batch' in grad_var.dims:
+        grad_var = grad_var.isel(batch=0)
+
+    # 获取数据
+    data = xarray_jax.unwrap_data(grad_var)
+    if hasattr(data, 'block_until_ready'):
+        data.block_until_ready()
+    data = np.array(data)
+
+    # 获取数据形状
+    lat_size, lon_size = data.shape
+
+    # 计算裁剪范围
+    lat_min = max(0, target_lat_idx - radius)
+    lat_max = min(lat_size, target_lat_idx + radius + 1)
+    lon_min = max(0, target_lon_idx - radius)
+    lon_max = min(lon_size, target_lon_idx + radius + 1)
+
+    # 裁剪数据
+    data_cropped = data[lat_min:lat_max, lon_min:lon_max]
+
+    # 计算目标点在裁剪后数据中的位置
+    target_lat_cropped = target_lat_idx - lat_min
+    target_lon_cropped = target_lon_idx - lon_min
+
+    print(f"\n裁剪信息:")
+    print(f"  变量: {var_name}{level_info}")
+    print(f"  原始数据形状: {data.shape}")
+    print(f"  裁剪范围: lat=[{lat_min}:{lat_max}], lon=[{lon_min}:{lon_max}]")
+    print(f"  裁剪后形状: {data_cropped.shape}")
+    print(f"  目标点在裁剪数据中的位置: ({target_lat_cropped}, {target_lon_cropped})")
+
+    # 绘制热力图
+    fig, ax = plt.subplots(figsize=(12, 10))
+
+    # 使用百分位数设置颜色范围（解决极端值问题）
+    if robust:
+        vmin_pct = np.percentile(data_cropped, 2)
+        vmax_pct = np.percentile(data_cropped, 98)
+        vabs = max(abs(vmin_pct), abs(vmax_pct))
+        vmin, vmax = -vabs, vabs
+    else:
+        vmax = np.abs(data_cropped).max()
+        vmin = -vmax
+
+    if vmax == 0:
+        vmax = 1
+        vmin = -1
+
+    im = ax.imshow(data_cropped, origin='lower', cmap='RdBu_r', 
+                   vmin=vmin, vmax=vmax, aspect='auto')
+    
+    cbar = plt.colorbar(im, ax=ax, label='Gradient', shrink=0.8)
+
+    # 标记目标点（台风中心）
+    ax.scatter(target_lon_cropped, target_lat_cropped, 
+               c='lime', s=400, marker='*',
+               edgecolors='black', linewidths=2.5, zorder=5,
+               label=f'Target Center')
+
+    # 添加网格线
+    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+
+    # 设置刻度标签（显示索引和真实经纬度）
+    n_ticks = 5
+    lat_tick_indices = np.linspace(0, data_cropped.shape[0]-1, n_ticks, dtype=int)
+    lon_tick_indices = np.linspace(0, data_cropped.shape[1]-1, n_ticks, dtype=int)
+    
+    # 计算对应的真实经纬度
+    resolution = 1.0
+    lat_labels = []
+    for i in lat_tick_indices:
+        idx = lat_min + i
+        lat = idx_to_lat(idx, resolution)
+        lat_labels.append(f'{idx}\n{format_lat(lat)}')
+    
+    lon_labels = []
+    for i in lon_tick_indices:
+        idx = lon_min + i
+        lon = idx_to_lon(idx, resolution)
+        lon_labels.append(f'{idx}\n{format_lon(lon)}')
+    
+    ax.set_yticks(lat_tick_indices)
+    ax.set_yticklabels(lat_labels)
+    ax.set_xticks(lon_tick_indices)
+    ax.set_xticklabels(lon_labels)
+
+    ax.set_title(f'局部 Saliency Map: {var_name}{level_info}\n'
+                 f'(目标点: lat={target_lat_idx}, lon={target_lon_idx}, 半径=±{radius} 网格)', 
+                 fontsize=13, fontweight='bold')
+    ax.set_xlabel('Longitude Index (经度)', fontsize=11)
+    ax.set_ylabel('Latitude Index (纬度)', fontsize=11)
+    ax.legend(loc='upper right', fontsize=10)
+    
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        print(f"✓ 图像已保存: {save_path}")
+
+    plt.show()
+    
+    return data_cropped
+
+
+# %%
 # ==================== 可视化 Saliency Map ====================
 
 print("\n【温度场梯度 - Robust 缩放】")
@@ -469,11 +644,250 @@ if '2m_temperature' in saliency_grads.data_vars:
     visualize_saliency(saliency_grads, '2m_temperature', robust=True)
 
 # %%
+# ==================== 局部区域热力图可视化 ====================
+
+print("\n" + "=" * 60)
+print("局部区域热力图可视化 (±50 网格)")
+print("=" * 60)
+
+# 可视化温度场局部梯度
+print("\n【温度场 - 局部区域热力图】")
+if 'temperature' in saliency_grads.data_vars:
+    local_temp_grads = visualize_local_saliency(
+        grads=saliency_grads,
+        var_name='temperature',
+        target_lat_idx=TARGET_LAT_IDX,
+        target_lon_idx=TARGET_LON_IDX,
+        radius=50,
+        level_idx=5,
+        robust=True,
+        save_path='saliency_local_temperature.png'
+    )
+
+# 可视化位势场局部梯度
+print("\n【位势场 - 局部区域热力图】")
+if 'geopotential' in saliency_grads.data_vars:
+    local_geo_grads = visualize_local_saliency(
+        grads=saliency_grads,
+        var_name='geopotential',
+        target_lat_idx=TARGET_LAT_IDX,
+        target_lon_idx=TARGET_LON_IDX,
+        radius=50,
+        level_idx=5,
+        robust=True,
+        save_path='saliency_local_geopotential.png'
+    )
+
+# 可视化2米温度局部梯度
+print("\n【2米温度 - 局部区域热力图】")
+if '2m_temperature' in saliency_grads.data_vars:
+    local_2m_temp_grads = visualize_local_saliency(
+        grads=saliency_grads,
+        var_name='2m_temperature',
+        target_lat_idx=TARGET_LAT_IDX,
+        target_lon_idx=TARGET_LON_IDX,
+        radius=50,
+        robust=True,
+        save_path='saliency_local_2m_temperature.png'
+    )
+
+# %%
+# ==================== 局部区域对数缩放可视化函数 ====================
+
+def visualize_local_saliency_log(
+    grads,
+    var_name,
+    target_lat_idx,
+    target_lon_idx,
+    radius=50,
+    level_idx=None,
+    time_idx=0,
+    scale_factor=1e6,
+    save_path=None
+):
+    """
+    使用对数缩放可视化目标点周围局部区域的 Saliency Map
+    
+    Args:
+        grads: 梯度数据
+        var_name: 变量名
+        target_lat_idx: 目标点纬度索引
+        target_lon_idx: 目标点经度索引
+        radius: 裁剪半径（网格数），默认 50
+        level_idx: 气压层索引（对于3D变量）
+        time_idx: 时间步索引
+        scale_factor: 对数缩放因子，默认 1e6
+        save_path: 保存路径（可选）
+    """
+    grad_var = grads[var_name]
+
+    if 'time' in grad_var.dims:
+        grad_var = grad_var.isel(time=time_idx)
+
+    if 'level' in grad_var.dims:
+        if level_idx is not None:
+            grad_var = grad_var.isel(level=level_idx)
+            level_info = f" @ level={level_idx}"
+        else:
+            grad_var = grad_var.isel(level=0)
+            level_info = " @ level=0"
+    else:
+        level_info = ""
+
+    if 'batch' in grad_var.dims:
+        grad_var = grad_var.isel(batch=0)
+
+    # 获取数据
+    data = xarray_jax.unwrap_data(grad_var)
+    if hasattr(data, 'block_until_ready'):
+        data.block_until_ready()
+    data = np.array(data)
+
+    # 获取数据形状
+    lat_size, lon_size = data.shape
+
+    # 计算裁剪范围
+    lat_min = max(0, target_lat_idx - radius)
+    lat_max = min(lat_size, target_lat_idx + radius + 1)
+    lon_min = max(0, target_lon_idx - radius)
+    lon_max = min(lon_size, target_lon_idx + radius + 1)
+
+    # 裁剪数据
+    data_cropped = data[lat_min:lat_max, lon_min:lon_max]
+
+    # 计算目标点在裁剪后数据中的位置
+    target_lat_cropped = target_lat_idx - lat_min
+    target_lon_cropped = target_lon_idx - lon_min
+
+    # 对数缩放
+    data_sign = np.sign(data_cropped)
+    data_log = data_sign * np.log1p(np.abs(data_cropped) * scale_factor)
+
+    print(f"\n裁剪信息 (对数缩放):")
+    print(f"  变量: {var_name}{level_info}")
+    print(f"  原始数据形状: {data.shape}")
+    print(f"  裁剪范围: lat=[{lat_min}:{lat_max}], lon=[{lon_min}:{lon_max}]")
+    print(f"  裁剪后形状: {data_cropped.shape}")
+    print(f"  目标点在裁剪数据中的位置: ({target_lat_cropped}, {target_lon_cropped})")
+    print(f"  对数缩放因子: {scale_factor}")
+
+    # 绘制热力图
+    fig, ax = plt.subplots(figsize=(12, 10))
+
+    vmax = np.abs(data_log).max()
+    if vmax == 0:
+        vmax = 1
+
+    im = ax.imshow(data_log, origin='lower', cmap='RdBu_r', 
+                   vmin=-vmax, vmax=vmax, aspect='auto')
+    
+    cbar = plt.colorbar(im, ax=ax, label='Log Gradient', shrink=0.8)
+
+    # 标记目标点（台风中心）
+    ax.scatter(target_lon_cropped, target_lat_cropped, 
+               c='lime', s=400, marker='*',
+               edgecolors='black', linewidths=2.5, zorder=5,
+               label=f'Target Center')
+
+    # 添加网格线
+    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+
+    # 设置刻度标签（显示索引和真实经纬度）
+    n_ticks = 5
+    lat_tick_indices = np.linspace(0, data_cropped.shape[0]-1, n_ticks, dtype=int)
+    lon_tick_indices = np.linspace(0, data_cropped.shape[1]-1, n_ticks, dtype=int)
+    
+    # 计算对应的真实经纬度
+    resolution = 1.0
+    lat_labels = []
+    for i in lat_tick_indices:
+        idx = lat_min + i
+        lat = idx_to_lat(idx, resolution)
+        lat_labels.append(f'{idx}\n{format_lat(lat)}')
+    
+    lon_labels = []
+    for i in lon_tick_indices:
+        idx = lon_min + i
+        lon = idx_to_lon(idx, resolution)
+        lon_labels.append(f'{idx}\n{format_lon(lon)}')
+    
+    ax.set_yticks(lat_tick_indices)
+    ax.set_yticklabels(lat_labels)
+    ax.set_xticks(lon_tick_indices)
+    ax.set_xticklabels(lon_labels)
+
+    ax.set_title(f'局部 Saliency Map (Log Scale): {var_name}{level_info}\n'
+                 f'(目标点: lat={target_lat_idx}, lon={target_lon_idx}, 半径=±{radius} 网格)', 
+                 fontsize=13, fontweight='bold')
+    ax.set_xlabel('Longitude Index (经度)', fontsize=11)
+    ax.set_ylabel('Latitude Index (纬度)', fontsize=11)
+    ax.legend(loc='upper right', fontsize=10)
+    
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        print(f"✓ 图像已保存: {save_path}")
+
+    plt.show()
+    
+    return data_cropped
+
+
+# %%
 # ==================== 对数缩放可视化（可选）====================
 
 print("\n【温度场梯度 - 对数缩放】")
 if 'temperature' in saliency_grads.data_vars:
     visualize_saliency_log(saliency_grads, 'temperature', level_idx=5)
+
+# %%
+# ==================== 局部区域对数缩放热力图可视化 ====================
+
+print("\n" + "=" * 60)
+print("局部区域对数缩放热力图可视化 (±50 网格)")
+print("=" * 60)
+
+# 可视化温度场局部梯度（对数缩放）
+print("\n【温度场 - 局部对数缩放热力图】")
+if 'temperature' in saliency_grads.data_vars:
+    local_temp_grads_log = visualize_local_saliency_log(
+        grads=saliency_grads,
+        var_name='temperature',
+        target_lat_idx=TARGET_LAT_IDX,
+        target_lon_idx=TARGET_LON_IDX,
+        radius=50,
+        level_idx=5,
+        scale_factor=1e6,
+        save_path='saliency_local_temperature_log.png'
+    )
+
+# 可视化位势场局部梯度（对数缩放）
+print("\n【位势场 - 局部对数缩放热力图】")
+if 'geopotential' in saliency_grads.data_vars:
+    local_geo_grads_log = visualize_local_saliency_log(
+        grads=saliency_grads,
+        var_name='geopotential',
+        target_lat_idx=TARGET_LAT_IDX,
+        target_lon_idx=TARGET_LON_IDX,
+        radius=50,
+        level_idx=5,
+        scale_factor=1e6,
+        save_path='saliency_local_geopotential_log.png'
+    )
+
+# 可视化2米温度局部梯度（对数缩放）
+print("\n【2米温度 - 局部对数缩放热力图】")
+if '2m_temperature' in saliency_grads.data_vars:
+    local_2m_temp_grads_log = visualize_local_saliency_log(
+        grads=saliency_grads,
+        var_name='2m_temperature',
+        target_lat_idx=TARGET_LAT_IDX,
+        target_lon_idx=TARGET_LON_IDX,
+        radius=50,
+        scale_factor=1e6,
+        save_path='saliency_local_2m_temperature_log.png'
+    )
 
 # %%
 # ==================== 保存结果（可选）====================
@@ -486,3 +900,4 @@ import pickle
 # print("梯度数据已保存到 saliency_grads.pkl")
 
 print("\n脚本执行完成!")
+print("\n提示: 局部区域热力图已生成，展示了目标点周围 ±50 个网格的梯度分布。")
