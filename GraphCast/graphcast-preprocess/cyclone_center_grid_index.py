@@ -5,8 +5,15 @@
 根据 ERA5/GraphCast 的全球分辨率（1度），
 将真实经纬度坐标转换为网格索引 (lat_index, lon_index)
 
-台风中心: (-21.7005°S, 157.5°E)
-计算结果: (lat_idx, lon_idx) = (68, 158)
+台风 Cyclone Seth 信息:
+  - 台风中心坐标: (-21.7005°S, 157.5°E)
+  - 网格索引: (lat_idx, lon_idx) = (68, 158)
+  
+数据集时间点说明 (dataset-source-era5_date-2022-01-01_...):
+  - 数据集包含: 2022-01-01 00:00 至 2022-01-02 06:00 (共6个时间点，每6小时)
+  - 输入数据: 1月1日 00:00 和 06:00 (转换后为 -6h 和 0h)
+  - 预测目标: 1月1日 12:00, 18:00 和 1月2日 00:00, 06:00 (转换后为 +6h, +12h, +18h, +24h)
+  - 预测参考点 (0h): 2022-01-01 06:00 (从此时刻开始预测未来24小时)
 
 注意：本脚本已更新为使用通用的 latlon_utils 模块
 """
@@ -122,6 +129,12 @@ def verify_index_with_dataset(lat_idx, lon_idx, dataset_file):
 print("=" * 70)
 print("Cyclone Seth 台风中心网格索引计算")
 print("=" * 70)
+print(f"\n台风事件时间信息:")
+print(f"  数据集日期: 2022-01-01")
+print(f"  数据时间范围: 2022-01-01 00:00 至 2022-01-02 06:00")
+print(f"  预测参考时间 (0h): 2022-01-01 06:00")
+print(f"  预测时长: 未来24小时 (至 2022-01-02 06:00)")
+
 print(f"\n台风中心真实坐标:")
 print(f"  纬度: {CYCLONE_CENTER_LAT}°S (南纬 {abs(CYCLONE_CENTER_LAT)}°)")
 print(f"  经度: {CYCLONE_CENTER_LON}°E (东经 {CYCLONE_CENTER_LON}°)")
@@ -214,6 +227,11 @@ print("""
 import xarray as xr
 
 ds = xr.open_dataset('cyclone_seth_2022-01-01_clipped.nc')
+
+# 数据集时间维度说明:
+# - 输入时间 (eval_inputs.time): [-6h, 0h] 对应 [1月1日00:00, 1月1日06:00]
+# - 预测时间 (eval_targets.time): [+6h, +12h, +18h, +24h] 对应 [1月1日12:00, 1月1日18:00, 1月2日00:00, 1月2日06:00]
+# - 时间坐标是相对于预测参考点(0h = 1月1日06:00)的偏移量
 
 # 方法1: 使用裁剪数据集中的局部索引
 clipped_lat_idx = {clipped_lat_idx}

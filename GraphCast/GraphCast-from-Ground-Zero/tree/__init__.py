@@ -18,13 +18,11 @@
 from collections import abc as collections_abc
 import logging
 import sys
+import importlib
+import importlib.util
+import os
 from typing import Mapping, Sequence, Text, TypeVar, Union
 #import numpy as np  # Added by 20231229
-
-from .sequence import _is_attrs
-from .sequence import _is_namedtuple
-from .sequence import _sequence_like
-from .sequence import _sorted
 
 # pylint: disable=g-import-not-at-top
 try:
@@ -34,13 +32,48 @@ except ImportError:
   class ObjectProxy(object):
     """Stub-class for `wrapt.ObjectProxy``."""
 
+# Import _tree BEFORE importing from sequence to avoid circular import
+# Use importlib to load the compiled extension module directly from file path
+_tree = None
+_tree_load_error = None
+
 try:
-  from tree import _tree
-except ImportError:
-  if "sphinx" not in sys.modules:
-    raise
-  print("Not find the file (_tree.cpython-310-x86_64-linux-gnu.so*). You need find it in https://colab.research.google.com/github/deepmind/graphcast/blob/master/graphcast_demo.ipynb, or you can rewrite _tree.py by our way. Added by 20231229 S.F. Sune, https://github.com/sfsun67")  
+  # Find and load the _tree extension module directly from its file path
+  # This avoids circular import issues by not using package-relative imports
+  tree_dir = os.path.dirname(os.path.abspath(__file__))
+  _tree_file = None
+  
+  # Search for the .so or .pyd file in the tree package directory
+  for fname in os.listdir(tree_dir):
+    if fname.startswith('_tree') and (fname.endswith('.so') or fname.endswith('.pyd') or fname.endswith('.dylib')):
+      _tree_file = os.path.join(tree_dir, fname)
+      break
+  
+  if _tree_file is not None:
+    # Load the extension module directly from the file path
+    _tree_spec = importlib.util.spec_from_file_location('_tree_ext', _tree_file)
+    if _tree_spec is not None and _tree_spec.loader is not None:
+      _tree = importlib.util.module_from_spec(_tree_spec)
+      _tree_spec.loader.exec_module(_tree)
+      # Also register it so other modules can find it
+      sys.modules['tree._tree'] = _tree
+  
+  if _tree is None:
+    _tree_load_error = f"Could not find _tree extension module in {tree_dir}"
+    
+except Exception as e:
+  _tree_load_error = str(e)
   _tree = None
+
+if _tree is None and "sphinx" not in sys.modules:
+  print(f"Warning: Could not load _tree module. Error: {_tree_load_error}")
+  print("Not find the file (_tree.cpython-310-x86_64-linux-gnu.so*). You need find it in https://colab.research.google.com/github/deepmind/graphcast/blob/master/graphcast_demo.ipynb, or you can rewrite _tree.py by our way. Added by 20231229 S.F. Sune, https://github.com/sfsun67")
+
+# Now import from sequence (which needs _tree)
+from .sequence import _is_attrs
+from .sequence import _is_namedtuple
+from .sequence import _sequence_like
+from .sequence import _sorted
 
 
 # pylint: enable=g-import-not-at-top
@@ -948,5 +981,3 @@ def traverse_with_path(fn, structure, top_down=True):
         return ret
 
   return traverse_impl((), structure)
-
-

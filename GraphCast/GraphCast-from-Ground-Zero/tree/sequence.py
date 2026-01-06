@@ -16,7 +16,35 @@
 import collections
 from collections import abc as collections_abc
 import types
-from tree import _tree
+import sys
+import os
+import importlib.util
+
+# Get _tree from sys.modules if already loaded by __init__.py, 
+# otherwise try to load it directly from file
+_tree = sys.modules.get('tree._tree')
+
+if _tree is None:
+  # Try to load _tree directly from the .so file
+  try:
+    tree_dir = os.path.dirname(os.path.abspath(__file__))
+    _tree_file = None
+    
+    # Search for the .so or .pyd file
+    for fname in os.listdir(tree_dir):
+      if fname.startswith('_tree') and (fname.endswith('.so') or fname.endswith('.pyd') or fname.endswith('.dylib')):
+        _tree_file = os.path.join(tree_dir, fname)
+        break
+    
+    if _tree_file is not None:
+      _tree_spec = importlib.util.spec_from_file_location('_tree_ext', _tree_file)
+      if _tree_spec is not None and _tree_spec.loader is not None:
+        _tree = importlib.util.module_from_spec(_tree_spec)
+        _tree_spec.loader.exec_module(_tree)
+        sys.modules['tree._tree'] = _tree
+  except Exception as e:
+    print(f"Warning: Could not load _tree in sequence.py: {e}")
+    _tree = None
 
 # pylint: disable=g-import-not-at-top
 try:

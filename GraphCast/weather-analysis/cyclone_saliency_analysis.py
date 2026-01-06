@@ -73,20 +73,40 @@ dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.n
 # %%
 # ==================== 台风眼坐标配置 ====================
 
-# 五个时间点的台风眼坐标 [纬度, 经度]
-# Date (UTC)  |  Lat      |  Lon      | Pressure (mb) | Wind (kt) | Category
-# ---------------------------------------------------------------------------
-# 01/01 00Z   | -21.2215  | 156.7095  |    997.0      |    40     |   TS
-# 01/01 06Z   | -21.7810  | 157.4565  |    996.0      |    40     |   TS
-# 01/01 12Z   | -22.5571  | 158.2946  |   1000.0      |    35     |   TS
-# 01/01 18Z   | -23.9132  | 158.8048  |    998.0      |    35     |   TS
-# 01/02 00Z   | -25.8306  | 159.0052  |    992.0      |    40     |   TS
+# 数据集时间点说明 (dataset-source-era5_date-2022-01-01_...):
+# -------------------------------------------------------------------------------
+# 原始数据集包含: 2022-01-01 00:00 至 2022-01-02 06:00 (共6个时间点，每6小时)
+# 
+# GraphCast 输入-预测划分:
+#   【输入数据】train_inputs.time = [-6h, 0h]:
+#     - 01/01 00:00 (转换后: -6h)  ← 输入时间点1
+#     - 01/01 06:00 (转换后:  0h)  ← 输入时间点2（预测参考点，"现在"）
+# 
+#   【预测目标】train_targets.time = [+6h, +12h, +18h, +24h]:
+#     - 01/01 12:00 (转换后: +6h)   ← 预测6小时后
+#     - 01/01 18:00 (转换后: +12h)  ← 预测12小时后
+#     - 01/02 00:00 (转换后: +18h)  ← 预测18小时后
+#     - 01/02 06:00 (转换后: +24h)  ← 预测24小时后
+# -------------------------------------------------------------------------------
+# 
+# 台风 Cyclone Seth 各时间点坐标:
+# Date (UTC)  |  Lat      |  Lon      | Pressure (mb) | Wind (kt) | Category | 数据类型
+# -----------------------------------------------------------------------------------
+# 01/01 00Z   | -21.2215  | 156.7095  |    997.0      |    40     |   TS     | 输入
+# 01/01 06Z   | -21.7810  | 157.4565  |    996.0      |    40     |   TS     | 输入（参考点）
+# 01/01 12Z   | -22.5571  | 158.2946  |   1000.0      |    35     |   TS     | 预测目标
+# 01/01 18Z   | -23.9132  | 158.8048  |    998.0      |    35     |   TS     | 预测目标
+# 01/02 00Z   | -25.8306  | 159.0052  |    992.0      |    40     |   TS     | 预测目标
+# 01/02 06Z   | (未提供)  | (未提供)  |      -        |     -     |   -      | 预测目标
+# 
+# 当前配置: 使用输入数据的2个时间点进行梯度分析
 CYCLONE_CENTERS = [
-    {"time": "2022-01-01 00Z", "lat": -21.2215, "lon": 156.7095, "pressure": 997.0, "wind_speed": 40, "category": "TS"},
-    {"time": "2022-01-01 06Z", "lat": -21.7810, "lon": 157.4565, "pressure": 996.0, "wind_speed": 40, "category": "TS"},
-    {"time": "2022-01-01 12Z", "lat": -22.5571, "lon": 158.2946, "pressure": 1000.0, "wind_speed": 35, "category": "TS"},
-    {"time": "2022-01-01 18Z", "lat": -23.9132, "lon": 158.8048, "pressure": 998.0, "wind_speed": 35, "category": "TS"},
-    {"time": "2022-01-02 00Z", "lat": -25.8306, "lon": 159.0052, "pressure": 992.0, "wind_speed": 40, "category": "TS"},
+    {"time": "2022-01-01 00Z", "lat": -21.2215, "lon": 156.7095, "pressure": 997.0, "wind_speed": 40, "category": "TS", "data_type": "输入(-6h)"},
+    {"time": "2022-01-01 06Z", "lat": -21.7810, "lon": 157.4565, "pressure": 996.0, "wind_speed": 40, "category": "TS", "data_type": "输入(0h)"},
+    # 以下是预测目标时间点（可选添加，用于对比分析）
+    # {"time": "2022-01-01 12Z", "lat": -22.5571, "lon": 158.2946, "pressure": 1000.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+6h)"},
+    # {"time": "2022-01-01 18Z", "lat": -23.9132, "lon": 158.8048, "pressure": 998.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+12h)"},
+    # {"time": "2022-01-02 00Z", "lat": -25.8306, "lon": 159.0052, "pressure": 992.0, "wind_speed": 40, "category": "TS", "data_type": "预测(+18h)"},
 ]
 
 # 数据网格分辨率
@@ -284,6 +304,7 @@ def plot_physics_ai_alignment(
     gradients,
     era5_data,
     gradient_var: str = '2m_temperature',
+    time_idx: int = 0,
     save_path: Optional[str] = None
 ):
     """
@@ -294,6 +315,7 @@ def plot_physics_ai_alignment(
         gradients: 梯度数据 (xarray Dataset)
         era5_data: ERA5 气象数据
         gradient_var: 用于可视化的梯度变量
+        time_idx: 时间索引，用于从多时间步数据中选择对应的时间
         save_path: 保存路径
     """
     target_lat = cyclone_info['lat']
@@ -306,16 +328,18 @@ def plot_physics_ai_alignment(
     grad_data = gradients[gradient_var]
     if 'batch' in grad_data.dims:
         grad_data = grad_data.isel(batch=0)
+    # 梯度数据的 time 维度是输入历史时间步，通常选择最后一个（最新的）
     if 'time' in grad_data.dims:
-        grad_data = grad_data.isel(time=0)
+        grad_data = grad_data.isel(time=-1)  # 使用最后一个时间步
     
-    # 如果有 level 维度,需要选择特定层或求和
-    # 对于 geopotential 等多层变量,我们对所有层求和以获得总体影响
+    # 如果有 level 维度,选择与目标变量一致的层次
+    # 这样可视化展示的梯度与计算目标物理意义一致
     if 'level' in grad_data.dims:
-        # 方法1: 对所有层求和(推荐,因为梯度反映了所有层的综合影响)
-        grad_data = grad_data.sum(dim='level')
-        # 方法2: 或者选择特定层,如 TARGET_LEVEL
-        # grad_data = grad_data.sel(level=TARGET_LEVEL)
+        # 选择 TARGET_LEVEL (500hPa) 层的梯度,与梯度计算目标一致
+        grad_data = grad_data.sel(level=TARGET_LEVEL)
+        print(f"  显示 {TARGET_LEVEL}hPa 层的梯度（与目标变量层次一致）")
+        # 备选方法: 对所有层求和,显示综合影响
+        # grad_data = grad_data.sum(dim='level')
     
     # 保存坐标信息（在 unwrap 之前）
     lat_coords = grad_data.lat
@@ -326,25 +350,28 @@ def plot_physics_ai_alignment(
         grad_data.block_until_ready()
     grad_np = np.array(grad_data)
     
-    # 2. 提取气压场数据
+    # 2. 提取气压场数据 (使用对应的时间步)
     if 'mean_sea_level_pressure' in era5_data.data_vars:
         pressure_data = era5_data['mean_sea_level_pressure']
         # 降维处理,确保是2D数据
         if 'batch' in pressure_data.dims:
             pressure_data = pressure_data.isel(batch=0)
         if 'time' in pressure_data.dims:
-            pressure_data = pressure_data.isel(time=0)
+            # 使用最后一个可用时间步（如果time_idx超出范围）
+            actual_time_idx = min(time_idx, len(pressure_data.time) - 1)
+            pressure_data = pressure_data.isel(time=actual_time_idx)
+            if actual_time_idx != time_idx:
+                print(f"  警告: time_idx={time_idx} 超出范围，使用 time={actual_time_idx}")
     else:
         # 如果没有海平面气压,使用其他变量替代
         pressure_data = None
     
     # 3. 提取高空引导风场数据 (Steering Flow)
     # 气压层选择:
-    #   index 7 = 500hPa (标准引导层,但可能太高)
+    #   index 7 = 500hPa (对流层中层标准引导层，与TARGET_LEVEL一致)
     #   index 9 = 700hPa (中低层引导,对热带风暴更适用)
     #   index 10 = 850hPa (边界层顶部)
-    # 对于南半球热带风暴,700hPa 通常比 500hPa 更准确
-    STEERING_LEVEL_IDX = 9  # 700 hPa - 对热带风暴更适用的引导层
+    STEERING_LEVEL_IDX = 7  # 500 hPa - 与梯度计算的目标层一致
     
     # 注意：这里使用的是带 level 维度的 u/v，而不是 10m_u/v
     u_wind_3d = era5_data['u_component_of_wind']
@@ -359,13 +386,15 @@ def plot_physics_ai_alignment(
         u_wind = u_wind_3d
         v_wind = v_wind_3d
     
-    # 处理 Batch 和 Time
+    # 处理 Batch 和 Time (使用对应的时间步)
     if 'batch' in u_wind.dims:
         u_wind = u_wind.isel(batch=0)
         v_wind = v_wind.isel(batch=0)
     if 'time' in u_wind.dims:
-        u_wind = u_wind.isel(time=0)
-        v_wind = v_wind.isel(time=0)
+        # 使用最后一个可用时间步（如果time_idx超出范围）
+        actual_time_idx = min(time_idx, len(u_wind.time) - 1)
+        u_wind = u_wind.isel(time=actual_time_idx)
+        v_wind = v_wind.isel(time=actual_time_idx)
     
     # 4. 裁剪到目标区域
     # 修复: 使用保存的坐标信息创建 DataArray
@@ -395,7 +424,7 @@ def plot_physics_ai_alignment(
     u_center = float(u_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
     v_center = float(v_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
     
-    print(f"  500hPa引导风速(单点): u={u_center:.2f}, v={v_center:.2f} m/s")
+    print(f"  500hPa引导风速(单点,time_idx={time_idx}): u={u_center:.2f}, v={v_center:.2f} m/s")
     print(f"  逆风方向: ({-u_center:.2f}, {-v_center:.2f}) m/s")
     
     # 6. 创建地图
@@ -541,6 +570,7 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
         gradients=saliency_grads,
         era5_data=train_inputs,
         gradient_var='geopotential',  # 与 TARGET_VARIABLE 保持一致,物理逻辑自洽
+        time_idx=idx,  # ✓ 修复: 传入对应的时间索引
         save_path=save_filename
     )
 

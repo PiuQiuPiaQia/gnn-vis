@@ -503,6 +503,128 @@ assert example_batch.dims["time"] >= 3  # 2 for input, >=1 for targets
 
 print(", ".join([f"{k}: {v}" for k, v in parse_file_parts(dataset_file.value.removesuffix(".nc")).items()]))
 
+# ============================================================================
+# 打印数据集的时间点信息
+# ============================================================================
+print("\n" + "="*80)
+print("数据集时间点详细信息")
+print("="*80)
+
+if 'time' in example_batch.coords:
+    time_coord = example_batch.coords['time']
+    num_times = len(time_coord)
+    
+    print(f"\n⏰ 时间点总数: {num_times}")
+    print(f"\n时间坐标类型: {type(time_coord.values[0])}")
+    print(f"时间坐标dtype: {time_coord.values.dtype}")
+    
+    import pandas as pd
+    from datetime import datetime, timedelta
+    
+    # 检查时间坐标的类型
+    if np.issubdtype(time_coord.values.dtype, np.timedelta64):
+        # 时间坐标是 timedelta 类型（相对时间）
+        print(f"\n⏱️  时间坐标存储为相对时间偏移量（timedelta64）")
+        print(f"\n所有时间点（相对偏移）:")
+        
+        # 尝试从数据集属性中获取参考时间，如果没有则使用文件名中的日期
+        reference_time = None
+        if hasattr(example_batch, 'attrs') and 'reference_time' in example_batch.attrs:
+            reference_time = pd.Timestamp(example_batch.attrs['reference_time'])
+        else:
+            # 从文件名中提取日期 (dataset_file.value 应该包含日期信息)
+            file_parts = parse_file_parts(dataset_file.value.removesuffix(".nc"))
+            if 'date' in file_parts:
+                reference_time = pd.Timestamp(file_parts['date'])
+        
+        for i, t in enumerate(time_coord.values):
+            # 转换 timedelta64 为小时数
+            hours_offset = t / np.timedelta64(1, 'h')
+            
+            if reference_time is not None:
+                # 如果有参考时间，计算绝对时间
+                abs_time = reference_time + pd.Timedelta(t)
+                print(f"  [{i}] +{hours_offset:6.1f}h -> {abs_time.strftime('%Y-%m-%d %H:%M:%S')} UTC (星期{['一','二','三','四','五','六','日'][abs_time.weekday()]})")
+            else:
+                print(f"  [{i}] +{hours_offset:6.1f}h")
+        
+        # 计算时间间隔
+        if num_times > 1:
+            time_diff = time_coord.values[1] - time_coord.values[0]
+            hours_diff = time_diff / np.timedelta64(1, 'h')
+            print(f"\n⏱️  时间间隔: {hours_diff:.1f} 小时")
+        
+        if reference_time is not None:
+            print(f"\n📅 参考时间: {reference_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            
+            # 检查绝对时间是否包含18:00
+            print(f"\n🔍 检查是否包含18:00的时间点:")
+            has_18_00 = False
+            found_18_00_times = []
+            
+            for i, t in enumerate(time_coord.values):
+                abs_time = reference_time + pd.Timedelta(t)
+                if abs_time.hour == 18:
+                    has_18_00 = True
+                    found_18_00_times.append((i, abs_time))
+            
+            if has_18_00:
+                print(f"  ✅ 是的，数据集包含18:00的时间点:")
+                for idx, dt in found_18_00_times:
+                    print(f"     索引[{idx}]: {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                    if dt.date() < reference_time.date():
+                        print(f"     -> 这是前一天的数据")
+                    elif dt.date() == reference_time.date():
+                        print(f"     -> 这是当天的数据")
+            else:
+                print(f"  ❌ 否，数据集不包含18:00的时间点")
+    
+    else:
+        # 时间坐标是 datetime64 类型（绝对时间）
+        print(f"\n📅 时间坐标存储为绝对时间（datetime64）")
+        print(f"\n所有时间点:")
+        
+        for i, t in enumerate(time_coord.values):
+            dt = pd.Timestamp(t).to_pydatetime()
+            print(f"  [{i}] {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC (星期{['一','二','三','四','五','六','日'][dt.weekday()]})")
+        
+        # 计算时间间隔
+        if num_times > 1:
+            time_diff = time_coord.values[1] - time_coord.values[0]
+            hours_diff = time_diff / np.timedelta64(1, 'h')
+            print(f"\n⏱️  时间间隔: {hours_diff:.1f} 小时")
+        
+        # 检查是否包含18:00的数据
+        print(f"\n🔍 检查是否包含18:00的时间点:")
+        has_18_00 = False
+        found_18_00_times = []
+        
+        for i, t in enumerate(time_coord.values):
+            dt = pd.Timestamp(t).to_pydatetime()
+            if dt.hour == 18:
+                has_18_00 = True
+                found_18_00_times.append((i, dt))
+        
+        if has_18_00:
+            print(f"  ✅ 是的，数据集包含18:00的时间点:")
+            for idx, dt in found_18_00_times:
+                print(f"     索引[{idx}]: {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                first_dt = pd.Timestamp(time_coord.values[0]).to_pydatetime()
+                if dt.date() < first_dt.date():
+                    print(f"     -> 这是前一天的数据")
+                elif dt.date() == first_dt.date():
+                    print(f"     -> 这是当天的数据")
+        else:
+            print(f"  ❌ 否，数据集不包含18:00的时间点")
+    
+    # 补充说明
+    print(f"\n💡 说明:")
+    print(f"  - GraphCast 使用相邻两个时间点作为输入 (例如: 00:00 和 06:00)")
+    print(f"  - 然后预测未来的时间点 (例如: 12:00, 18:00, ...)")
+    print(f"  - ERA5 标准数据包含: 00:00, 06:00, 12:00, 18:00 四个时间点")
+
+print("="*80 + "\n")
+
 example_batch
 
 
@@ -1339,4 +1461,3 @@ except Exception as e:
 
 
 # %%
-
