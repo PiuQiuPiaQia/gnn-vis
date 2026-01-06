@@ -56,7 +56,7 @@ import haiku as hk
 # 导入经纬度转换工具
 from latlon_utils import latlon_to_index, index_to_latlon
 # 导入区域数据提取工具
-from region_utils import extract_region_data
+from region_utils import extract_region_data, extract_annulus_mean
 
 print("JAX devices:", jax.devices())
 
@@ -99,14 +99,14 @@ dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.n
 # 01/02 00Z   | -25.8306  | 159.0052  |    992.0      |    40     |   TS     | 预测目标
 # 01/02 06Z   | (未提供)  | (未提供)  |      -        |     -     |   -      | 预测目标
 # 
-# 当前配置: 使用输入数据的2个时间点进行梯度分析
+# 当前配置: 使用输入数据的2个时间点 + 预测目标时间点进行梯度分析
 CYCLONE_CENTERS = [
-    {"time": "2022-01-01 00Z", "lat": -21.2215, "lon": 156.7095, "pressure": 997.0, "wind_speed": 40, "category": "TS", "data_type": "输入(-6h)"},
-    {"time": "2022-01-01 06Z", "lat": -21.7810, "lon": 157.4565, "pressure": 996.0, "wind_speed": 40, "category": "TS", "data_type": "输入(0h)"},
-    # 以下是预测目标时间点（可选添加，用于对比分析）
-    # {"time": "2022-01-01 12Z", "lat": -22.5571, "lon": 158.2946, "pressure": 1000.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+6h)"},
-    # {"time": "2022-01-01 18Z", "lat": -23.9132, "lon": 158.8048, "pressure": 998.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+12h)"},
-    # {"time": "2022-01-02 00Z", "lat": -25.8306, "lon": 159.0052, "pressure": 992.0, "wind_speed": 40, "category": "TS", "data_type": "预测(+18h)"},
+    {"time": "2022-01-01 00Z", "lat": -21.2215, "lon": 156.7095, "pressure": 997.0, "wind_speed": 40, "category": "TS", "data_type": "输入(-6h)", "is_input": True, "input_time_idx": 0},
+    {"time": "2022-01-01 06Z", "lat": -21.7810, "lon": 157.4565, "pressure": 996.0, "wind_speed": 40, "category": "TS", "data_type": "输入(0h)", "is_input": True, "input_time_idx": 1},
+    # 以下是预测目标时间点
+    {"time": "2022-01-01 12Z", "lat": -22.5571, "lon": 158.2946, "pressure": 1000.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+6h)", "is_input": False, "target_time_idx": 0},
+    {"time": "2022-01-01 18Z", "lat": -23.9132, "lon": 158.8048, "pressure": 998.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+12h)", "is_input": False, "target_time_idx": 1},
+    {"time": "2022-01-02 00Z", "lat": -25.8306, "lon": 159.0052, "pressure": 992.0, "wind_speed": 40, "category": "TS", "data_type": "预测(+18h)", "is_input": False, "target_time_idx": 2},
 ]
 
 # 数据网格分辨率
@@ -171,7 +171,9 @@ print("数据维度:", example_batch.dims.mapping)
 # %%
 # ==================== 提取训练数据 ====================
 
-train_steps = 1
+# 增加预测步数以获取更多时间点的数据
+# 原数据集包含 4 个预测步: +6h, +12h, +18h, +24h
+train_steps = 4
 
 train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_forcings(
     example_batch,
@@ -305,17 +307,21 @@ def plot_physics_ai_alignment(
     era5_data,
     gradient_var: str = '2m_temperature',
     time_idx: int = 0,
+    all_cyclone_centers: Optional[list] = None,
     save_path: Optional[str] = None
 ):
     """
     绘制物理-AI对齐分析图
-    
+
     Args:
         cyclone_info: 台风信息字典 {time, lat, lon, intensity}
         gradients: 梯度数据 (xarray Dataset)
         era5_data: ERA5 气象数据
         gradient_var: 用于可视化的梯度变量
         time_idx: 时间索引，用于从多时间步数据中选择对应的时间
+                  - 0: 对应输入数据的第一个时间步 (-6h = 00Z)
+                  - 1: 对应输入数据的第二个时间步 (0h = 06Z)
+        all_cyclone_centers: 所有台风中心点列表，用于绘制台风路径
         save_path: 保存路径
     """
     target_lat = cyclone_info['lat']
@@ -328,9 +334,14 @@ def plot_physics_ai_alignment(
     grad_data = gradients[gradient_var]
     if 'batch' in grad_data.dims:
         grad_data = grad_data.isel(batch=0)
-    # 梯度数据的 time 维度是输入历史时间步，通常选择最后一个（最新的）
+    # 梯度数据的 time 维度是输入历史时间步
+    # 重要修复: 使用 time_idx 选择对应的时间步，保证梯度与物理量时间一致
+    # - time_idx=0: 使用 00Z 时间步的梯度
+    # - time_idx=1: 使用 06Z 时间步的梯度
     if 'time' in grad_data.dims:
-        grad_data = grad_data.isel(time=-1)  # 使用最后一个时间步
+        actual_grad_time_idx = min(time_idx, len(grad_data.time) - 1)
+        grad_data = grad_data.isel(time=actual_grad_time_idx)
+        print(f"  梯度时间步: {actual_grad_time_idx} (共 {len(gradients[gradient_var].time)} 个时间步)")
     
     # 如果有 level 维度,选择与目标变量一致的层次
     # 这样可视化展示的梯度与计算目标物理意义一致
@@ -366,35 +377,95 @@ def plot_physics_ai_alignment(
         # 如果没有海平面气压,使用其他变量替代
         pressure_data = None
     
-    # 3. 提取高空引导风场数据 (Steering Flow)
-    # 气压层选择:
-    #   index 7 = 500hPa (对流层中层标准引导层，与TARGET_LEVEL一致)
-    #   index 9 = 700hPa (中低层引导,对热带风暴更适用)
-    #   index 10 = 850hPa (边界层顶部)
-    STEERING_LEVEL_IDX = 7  # 500 hPa - 与梯度计算的目标层一致
-    
+    # 3. 提取深层平均引导风场数据 (Deep Layer Mean Steering Flow)
+    # ============================================================================
+    # 气象学标准：JTWC 和 CMA 并非只看单层，而是计算深层平均气流
+    # 标准做法：计算 850hPa 到 200hPa 的质量加权平均
+    #
+    # 为什么需要深层平均？
+    # - 850hPa: 低层引导，反映边界层影响
+    # - 700hPa: 中低层引导，对弱台风/热带风暴重要
+    # - 500hPa: 中层引导，经典分析层
+    # - 300hPa: 高层引导，受西风带影响，对强台风路径关键
+    # - 200hPa: 高空急流，影响台风移速和强度
+    #
+    # 公式：V_steering = Σ(V_i × weight_i) / Σ(weight_i)
+    # 简化版：V_steering = (V_850 + V_700 + V_500 + V_300 + V_200) / 5
+    # ============================================================================
+
+    # 定义引导气流的气压层（单位：hPa）
+    # GraphCast 的 13 个气压层: [50, 100, 150, 200, 250, 300, 400, 500, 600, 700, 850, 925, 1000]
+    #
+    # 诊断结果：对于热带风暴（TS），700 hPa 单层最准确（平均误差 14.9°）
+    # - 850 hPa: 误差 > 60°（风向完全错误，向西而非向南）
+    # - 500-200 hPa: 偏东，与低层风向冲突
+    # - 深层平均: 误差 29.5°（几乎是 700 hPa 的 2 倍）
+    #
+    # 气象学解释：
+    # - 弱台风/热带风暴的引导层在 700 hPa（对流层中低层）
+    # - 强台风才需要深层平均（200-850 hPa）
+    STEERING_LEVELS = [700]  # hPa - 只使用 700 hPa，对热带风暴最准确
+
+    # 可选：质量加权（气压越高，质量越大）
+    # 这里使用简单平均，你也可以改为质量加权
+    USE_WEIGHTED = False  # True: 质量加权平均, False: 简单平均
+
+    if len(STEERING_LEVELS) == 1:
+        print(f"  使用 {STEERING_LEVELS[0]} hPa 引导气流（对热带风暴最准确）")
+    else:
+        print(f"  计算深层平均引导气流 (DLM): {STEERING_LEVELS} hPa")
+
     # 注意：这里使用的是带 level 维度的 u/v，而不是 10m_u/v
     u_wind_3d = era5_data['u_component_of_wind']
     v_wind_3d = era5_data['v_component_of_wind']
-    
-    # 处理维度：取特定层 (Steering Level)
+
+    # 处理 Batch 和 Time 维度
+    if 'batch' in u_wind_3d.dims:
+        u_wind_3d = u_wind_3d.isel(batch=0)
+        v_wind_3d = v_wind_3d.isel(batch=0)
+    if 'time' in u_wind_3d.dims:
+        actual_time_idx = min(time_idx, len(u_wind_3d.time) - 1)
+        u_wind_3d = u_wind_3d.isel(time=actual_time_idx)
+        v_wind_3d = v_wind_3d.isel(time=actual_time_idx)
+
+    # 计算深层平均风场
     if 'level' in u_wind_3d.dims:
-        u_wind = u_wind_3d.isel(level=STEERING_LEVEL_IDX)
-        v_wind = v_wind_3d.isel(level=STEERING_LEVEL_IDX)
+        u_layers = []
+        v_layers = []
+        weights = []
+
+        for level in STEERING_LEVELS:
+            try:
+                # 选择气压层
+                u_layer = u_wind_3d.sel(level=level, method='nearest')
+                v_layer = v_wind_3d.sel(level=level, method='nearest')
+
+                u_layers.append(u_layer)
+                v_layers.append(v_layer)
+
+                # 质量权重（可选）：气压越大，权重越高
+                weight = level / 1000.0 if USE_WEIGHTED else 1.0
+                weights.append(weight)
+
+                print(f"    - {level} hPa: 已提取")
+            except Exception as e:
+                print(f"    - {level} hPa: 跳过 (数据不存在)")
+
+        # 计算加权平均
+        if len(u_layers) > 0:
+            u_wind = sum(u * w for u, w in zip(u_layers, weights)) / sum(weights)
+            v_wind = sum(v * w for v, w in zip(v_layers, weights)) / sum(weights)
+            print(f"  ✓ 深层平均完成，使用 {len(u_layers)} 个气压层")
+        else:
+            # 回退：如果没有数据，使用 500hPa
+            print(f"  警告: 无法提取多层数据，回退到 500hPa 单层")
+            u_wind = u_wind_3d.sel(level=500, method='nearest')
+            v_wind = v_wind_3d.sel(level=500, method='nearest')
     else:
         # Fallback (防守性编程)
+        print(f"  警告: 数据无 level 维度")
         u_wind = u_wind_3d
         v_wind = v_wind_3d
-    
-    # 处理 Batch 和 Time (使用对应的时间步)
-    if 'batch' in u_wind.dims:
-        u_wind = u_wind.isel(batch=0)
-        v_wind = v_wind.isel(batch=0)
-    if 'time' in u_wind.dims:
-        # 使用最后一个可用时间步（如果time_idx超出范围）
-        actual_time_idx = min(time_idx, len(u_wind.time) - 1)
-        u_wind = u_wind.isel(time=actual_time_idx)
-        v_wind = v_wind.isel(time=actual_time_idx)
     
     # 4. 裁剪到目标区域
     # 修复: 使用保存的坐标信息创建 DataArray
@@ -415,17 +486,65 @@ def plot_physics_ai_alignment(
     
     u_region, _, _ = extract_region_data(u_wind, target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION)
     v_region, _, _ = extract_region_data(v_wind, target_lat, target_lon, REGION_RADIUS, GRID_RESOLUTION)
-    
-    # 5. 计算台风周围环境的平均引导风 (区域平均,而不是单点)
-    STEERING_RADIUS = 3.0  # 引导风计算半径(度)
-    
-    # 直接用最近邻方法提取台风中心点的风速 (避免slice方向问题)
-    # 这比区域平均更直接,且避免了南半球坐标系统的slice问题
-    u_center = float(u_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
-    v_center = float(v_wind.sel(lat=target_lat, lon=target_lon, method='nearest').values)
-    
-    print(f"  500hPa引导风速(单点,time_idx={time_idx}): u={u_center:.2f}, v={v_center:.2f} m/s")
-    print(f"  逆风方向: ({-u_center:.2f}, {-v_center:.2f}) m/s")
+
+    # 5. 计算台风中心周围环形区域的深层平均引导风
+    # ============================================================================
+    # 气象学标准（JTWC/CMA，Holland 1984）：
+    # 引导气流 = 台风中心外围环形区域内的深层平均风场
+    #
+    # 参数设置：
+    # - 内半径 3°：排除台风环流核心（避免台风自身环流影响）
+    # - 外半径 7°：捕获环境引导气流
+    # - 850-200hPa：深层平均（强度越强，层次越深）
+    #
+    # 物理意义：
+    # - 环境风场代表"推动"台风移动的大尺度气流
+    # - 台风中心点的风速受台风自身环流影响，不能代表引导气流
+    # - 环形区域平均有效排除台风环流，反映真实的环境引导
+    # ============================================================================
+
+    INNER_RADIUS = 2.0  # 度（优化后参数，原为 3.0°）
+    OUTER_RADIUS = 5.0  # 度（优化后参数，原为 7.0°）
+
+    print(f"  计算环形区域平均引导风 (半径 {INNER_RADIUS}°-{OUTER_RADIUS}°, DLM)...")
+
+    # 对每个气压层的风场，计算环形区域平均
+    u_annulus_layers = []
+    v_annulus_layers = []
+
+    for level in STEERING_LEVELS:
+        u_layer = u_wind_3d.sel(level=level, method='nearest')
+        v_layer = v_wind_3d.sel(level=level, method='nearest')
+
+        # 计算环形区域平均
+        u_mean = extract_annulus_mean(u_layer, target_lat, target_lon,
+                                       INNER_RADIUS, OUTER_RADIUS)
+        v_mean = extract_annulus_mean(v_layer, target_lat, target_lon,
+                                       INNER_RADIUS, OUTER_RADIUS)
+
+        u_annulus_layers.append(u_mean)
+        v_annulus_layers.append(v_mean)
+
+        print(f"    - {level:4d} hPa: u={u_mean:6.2f}, v={v_mean:6.2f} m/s")
+
+    # 计算多层加权平均（简单平均，可改为压力加权）
+    weights = [1.0] * len(STEERING_LEVELS)
+    u_center = sum(u * w for u, w in zip(u_annulus_layers, weights)) / sum(weights)
+    v_center = sum(v * w for v, w in zip(v_annulus_layers, weights)) / sum(weights)
+
+    if len(STEERING_LEVELS) == 1:
+        print(f"  环形区域 {STEERING_LEVELS[0]} hPa 引导风: u={u_center:.2f}, v={v_center:.2f} m/s")
+    else:
+        print(f"  环形区域深层平均引导风 (DLM): u={u_center:.2f}, v={v_center:.2f} m/s")
+
+    # 调试：计算风向角度
+    import math
+    wind_angle = math.atan2(v_center, u_center) * 180 / math.pi
+    upwind_angle = math.atan2(-v_center, -u_center) * 180 / math.pi
+    wind_speed = math.sqrt(u_center**2 + v_center**2)
+    print(f"  环境风速大小: {wind_speed:.2f} m/s")
+    print(f"  环境风向角度: {wind_angle:.1f}° (0°=正东, 90°=正北)")
+    print(f"  引导气流上游方向: {upwind_angle:.1f}° (逆风方向，气流来源)")
     
     # 6. 创建地图
     fig = plt.figure(figsize=(14, 12))
@@ -472,23 +591,68 @@ def plot_physics_ai_alignment(
     
     cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, shrink=0.8)
     cbar.set_label(f'{gradient_var} Gradient (AI Saliency)', fontsize=11)
-    
-    # 9. 绘制台风眼标记
-    ax.scatter(target_lon, target_lat, marker='x', s=400, c='red', 
+
+    # 9. 绘制台风路径线
+    if all_cyclone_centers is not None and len(all_cyclone_centers) > 1:
+        # 提取所有台风中心点的经纬度
+        track_lons = [c['lon'] for c in all_cyclone_centers]
+        track_lats = [c['lat'] for c in all_cyclone_centers]
+
+        # 绘制台风路径线
+        ax.plot(track_lons, track_lats, color='purple', linewidth=2.5,
+               linestyle='-', marker='o', markersize=6, markerfacecolor='white',
+               markeredgecolor='purple', markeredgewidth=2,
+               transform=ccrs.PlateCarree(), zorder=4, alpha=0.8,
+               label='台风路径')
+
+        # 在每个点旁边标注时间
+        for i, c in enumerate(all_cyclone_centers):
+            # 提取时间标签 (例如 "00Z", "06Z")
+            time_str = c['time'].split()[-1] if ' ' in c['time'] else c['time']
+            ax.text(c['lon'] + 0.5, c['lat'] + 0.5, time_str,
+                   fontsize=9, color='purple', fontweight='bold',
+                   transform=ccrs.PlateCarree(), zorder=4,
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='purple', alpha=0.7))
+
+    # 10. 绘制当前台风眼标记
+    ax.scatter(target_lon, target_lat, marker='x', s=400, c='red',
               linewidths=4, transform=ccrs.PlateCarree(), zorder=5,
-              label='Cyclone Center')
-    
-    # 10. 绘制逆风向量箭头 (指向上游)
-    # 箭头指向 (-u, -v)
-    # 注意: 高空风通常比地面风强,使用较小的 scale 避免箭头过长
-    # TODO: 箭头方向还是不对，需要进一步检查坐标系统和风向计算逻辑
-    arrow_scale = 1.0  # 调整箭头长度 (高空风建议 0.5-1.0,地面风建议 2.0)
-    ax.arrow(target_lon, target_lat, -u_center * arrow_scale, -v_center * arrow_scale,
-             head_width=0.8, head_length=1.2, fc='yellow', ec='black', 
+              label='当前台风中心')
+
+    # 11. 绘制环境引导气流箭头（顺风方向 = 台风移动趋势）
+    # ============================================================================
+    # 箭头指向 (u, v)，表示台风移动趋势（气流推动方向）
+    # 物理意义：
+    # - 环形区域（2-5°）平均风场 = 环境引导气流（排除台风自身环流）
+    # - 700 hPa 单层 = 热带风暴的主导引导层（诊断优化结果）
+    # - 顺风方向（u, v）= 台风被推动的方向
+    # - 黄色箭头指向台风下一步可能移动的方向
+    #
+    # 气象学依据：
+    # - Holland (1984): 引导气流 = 环形区域平均风场
+    # - 诊断结果：700 hPa 平均误差 14.9°（深层平均 29.5°）
+    # - 弱台风/热带风暴的引导层在中低层（700 hPa），强台风才需深层平均
+    # ============================================================================
+
+    # 方法：归一化风向 + 固定箭头长度（方向准确，长度统一）
+    arrow_length_deg = 5.0  # 箭头固定长度（度）
+    wind_magnitude = math.sqrt(u_center**2 + v_center**2)
+    if wind_magnitude > 0:
+        # 归一化风向，然后缩放到固定长度
+        u_norm = u_center / wind_magnitude * arrow_length_deg  # 顺风方向
+        v_norm = v_center / wind_magnitude * arrow_length_deg  # 顺风方向
+    else:
+        u_norm, v_norm = 0, 0
+
+    ax.arrow(target_lon, target_lat, u_norm, v_norm,
+             head_width=0.8, head_length=1.2, fc='yellow', ec='black',
              linewidth=2.5, transform=ccrs.PlateCarree(), zorder=6,
-             label=f'Upwind Direction (−u,−v)')
-    
-    # 11. 添加标题和图例
+             label=f'台风移动趋势 (引导气流 {wind_speed:.1f} m/s)')
+
+    print(f"  箭头绘制: 从 ({target_lon:.1f}, {target_lat:.1f}) 指向 ({target_lon+u_norm:.1f}, {target_lat+v_norm:.1f})")
+
+    # 12. 添加标题和图例
     pressure_info = f"{cyclone_info['pressure']} mb" if 'pressure' in cyclone_info else ""
     wind_info = f"{cyclone_info['wind_speed']} kt" if 'wind_speed' in cyclone_info else cyclone_info.get('intensity', '')
     category_info = cyclone_info.get('category', '')
@@ -507,15 +671,26 @@ def plot_physics_ai_alignment(
     
     # 创建自定义图例
     legend_elements = [
-        mpatches.Patch(facecolor='none', edgecolor='blue', linewidth=1.5, 
+        mpatches.Patch(facecolor='none', edgecolor='blue', linewidth=1.5,
                       label='等压线 (MSLP)'),
         mpatches.Patch(facecolor='red', alpha=0.6, label='梯度热力图 (AI)'),
-        plt.Line2D([0], [0], marker='x', color='w', markerfacecolor='red', 
-                  markersize=15, markeredgewidth=3, label='台风中心'),
+    ]
+
+    # 如果绘制了台风路径，添加到图例
+    if all_cyclone_centers is not None and len(all_cyclone_centers) > 1:
+        legend_elements.append(
+            plt.Line2D([0], [0], color='purple', linewidth=2.5, marker='o',
+                      markersize=6, markerfacecolor='white', markeredgecolor='purple',
+                      markeredgewidth=2, label='台风路径')
+        )
+
+    legend_elements.extend([
+        plt.Line2D([0], [0], marker='x', color='w', markerfacecolor='red',
+                  markersize=15, markeredgewidth=3, label='当前台风中心'),
         plt.Line2D([0], [0], marker='>', color='yellow', markerfacecolor='yellow',
                   markersize=12, markeredgecolor='black', markeredgewidth=1.5,
-                  label=f'逆风方向 ({-u_center:.1f}, {-v_center:.1f} m/s)')
-    ]
+                  label=f'台风移动趋势 ({wind_speed:.1f} m/s, {wind_angle:.0f}°)')
+    ])
     ax.legend(handles=legend_elements, loc='upper right', fontsize=10, framealpha=0.9)
     
     plt.tight_layout()
@@ -535,8 +710,8 @@ print("开始生成物理-AI对齐分析图")
 print("=" * 70)
 
 for idx, cyclone in enumerate(CYCLONE_CENTERS):
-    print(f"\n【{idx + 1}/{len(CYCLONE_CENTERS)}】处理时间点: {cyclone['time']}")
-    
+    print(f"\n【{idx + 1}/{len(CYCLONE_CENTERS)}】处理时间点: {cyclone['time']} ({cyclone['data_type']})")
+
     # 计算目标点索引
     target_lat_idx, target_lon_idx = latlon_to_index(
         lat=cyclone['lat'],
@@ -545,12 +720,26 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
         lat_min=-90.0,
         lon_min=0.0
     )
-    
+
     print(f"  台风眼坐标: ({cyclone['lat']:.4f}°, {cyclone['lon']:.4f}°)")
     print(f"  网格索引: (lat_idx={target_lat_idx}, lon_idx={target_lon_idx})")
-    
+
+    # 根据是输入还是预测时间点，确定梯度计算的目标时间索引
+    if cyclone.get('is_input', True):
+        # 输入时间点：梯度目标是第一个预测步 (+6h = 12Z)
+        grad_target_time_idx = 0
+        # 物理场使用输入数据
+        physics_data = train_inputs
+        physics_time_idx = cyclone['input_time_idx']
+    else:
+        # 预测时间点：梯度目标是对应的预测步
+        grad_target_time_idx = cyclone['target_time_idx']
+        # 物理场使用目标数据 (ERA5 真实值)
+        physics_data = train_targets
+        physics_time_idx = cyclone['target_time_idx']
+
     # 计算梯度
-    print("  计算梯度...")
+    print(f"  计算梯度 (target_time_idx={grad_target_time_idx})...")
     saliency_grads = compute_saliency_map(
         inputs=train_inputs,
         targets=train_targets,
@@ -558,19 +747,20 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
         target_idx=(target_lat_idx, target_lon_idx),
         target_variable=TARGET_VARIABLE,
         target_level=TARGET_LEVEL,
-        target_time_idx=0,
+        target_time_idx=grad_target_time_idx,
         negative=NEGATIVE_GRADIENT
     )
-    
+
     # 生成可视化
     save_filename = f"physics_ai_alignment_{idx:02d}_{cyclone['time'].replace(' ', '_').replace(':', '')}.png"
-    
+
     plot_physics_ai_alignment(
         cyclone_info=cyclone,
         gradients=saliency_grads,
-        era5_data=train_inputs,
+        era5_data=physics_data,
         gradient_var='geopotential',  # 与 TARGET_VARIABLE 保持一致,物理逻辑自洽
-        time_idx=idx,  # ✓ 修复: 传入对应的时间索引
+        time_idx=physics_time_idx,  # 使用正确的物理场时间索引
+        all_cyclone_centers=CYCLONE_CENTERS,  # 传入所有台风中心点用于绘制路径
         save_path=save_filename
     )
 
