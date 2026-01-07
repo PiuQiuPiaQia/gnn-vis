@@ -62,13 +62,17 @@ print("JAX devices:", jax.devices())
 
 # %%
 # ==================== 路径配置 ====================
+dir_path_params = "/root/autodl-tmp/data/params"
+dir_path_dataset = "/root/autodl-tmp/data/dataset"
+dir_path_stats = "/root/autodl-tmp/data/stats"
 
-dir_path_params = "/root/data/params"
-dir_path_dataset = "/root/data/dataset"
-dir_path_stats = "/root/data/stats"
+# 使用小模型以避免内存溢出
+# params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
+# dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
 
-params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
-dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
+# 如果内存充足，可以使用高分辨率模型（需要 >32GB GPU 内存）
+params_file = "params-GraphCast - ERA5 1979-2017 - resolution 0.25 - pressure levels 37 - mesh 2to6 - precipitation input and output.npz"
+dataset_file = "dataset-source-era5_date-2022-01-01_res-0.25_levels-37_steps-04.nc"
 
 # %%
 # ==================== 台风眼坐标配置 ====================
@@ -110,7 +114,8 @@ CYCLONE_CENTERS = [
 ]
 
 # 数据网格分辨率
-GRID_RESOLUTION = 1.0  # 度
+GRID_RESOLUTION = 0.25  # 度 (与数据集分辨率一致: res-1.0)
+# 注意：如果切换到高分辨率数据，需要改为 GRID_RESOLUTION = 0.25
 
 # 可视化配置
 REGION_RADIUS = 15  # 裁剪半径 (度)
@@ -251,7 +256,6 @@ def compute_saliency_map(
 ):
     """
     计算 GraphCast 输入梯度 (Saliency Map)
-    
     Args:
         inputs: 输入数据
         targets: 目标模板
@@ -261,7 +265,6 @@ def compute_saliency_map(
         target_level: 目标气压层 (hPa)
         target_time_idx: 预测时间步索引
         negative: True则返回负梯度
-    
     Returns:
         grads: 输入梯度
     """
