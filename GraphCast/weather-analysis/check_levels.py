@@ -4,8 +4,7 @@
 import xarray
 
 # 加载数据
-# 旧路径 (1.0° 分辨率, 13 层): "/root/data/dataset/dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
-dataset_file = "/root/autodl-tmp/data/dataset/dataset-source-era5_date-2022-01-01_res-0.25_levels-37_steps-04.nc"
+dataset_file = "/root/data/dataset/dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
 
 with open(dataset_file, "rb") as f:
     data = xarray.load_dataset(f).compute()

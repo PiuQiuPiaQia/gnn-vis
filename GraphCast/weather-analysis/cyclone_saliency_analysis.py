@@ -62,9 +62,9 @@ print("JAX devices:", jax.devices())
 
 # %%
 # ==================== 路径配置 ====================
-dir_path_params = "/root/autodl-tmp/data/params"
-dir_path_dataset = "/root/autodl-tmp/data/dataset"
-dir_path_stats = "/root/autodl-tmp/data/stats"
+dir_path_params = "/root/data/params"
+dir_path_dataset = "/root/data/dataset"
+dir_path_stats = "/root/data/stats"
 
 # 使用小模型以避免内存溢出
 # params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
@@ -706,14 +706,17 @@ def plot_physics_ai_alignment(
 
 
 # %%
-# ==================== 主流程: 为5个时间点生成对齐分析图 ====================
+# ==================== Cell 1: 批量计算所有时间点的梯度 (反向传播) ====================
 
 print("\n" + "=" * 70)
-print("开始生成物理-AI对齐分析图")
+print("【步骤 1/2】开始批量计算梯度（反向传播）")
 print("=" * 70)
 
+# 存储所有时间点的梯度和元数据
+gradient_results = []
+
 for idx, cyclone in enumerate(CYCLONE_CENTERS):
-    print(f"\n【{idx + 1}/{len(CYCLONE_CENTERS)}】处理时间点: {cyclone['time']} ({cyclone['data_type']})")
+    print(f"\n【{idx + 1}/{len(CYCLONE_CENTERS)}】计算时间点: {cyclone['time']} ({cyclone['data_type']})")
 
     # 计算目标点索引
     target_lat_idx, target_lon_idx = latlon_to_index(
@@ -741,8 +744,11 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
         physics_data = train_targets
         physics_time_idx = cyclone['target_time_idx']
 
-    # 计算梯度
+    # 计算梯度（最耗时的操作）
     print(f"  计算梯度 (target_time_idx={grad_target_time_idx})...")
+    import time
+    start_time = time.time()
+
     saliency_grads = compute_saliency_map(
         inputs=train_inputs,
         targets=train_targets,
@@ -753,6 +759,39 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
         target_time_idx=grad_target_time_idx,
         negative=NEGATIVE_GRADIENT
     )
+
+    elapsed = time.time() - start_time
+    print(f"  ✓ 梯度计算完成 (耗时: {elapsed:.2f}s)")
+
+    # 保存梯度结果和元数据
+    gradient_results.append({
+        'idx': idx,
+        'cyclone_info': cyclone,
+        'gradients': saliency_grads,
+        'physics_data': physics_data,
+        'physics_time_idx': physics_time_idx
+    })
+
+print("\n" + "=" * 70)
+print(f"✓ 所有梯度计算完成！共 {len(gradient_results)} 个时间点")
+print("=" * 70)
+
+
+# %%
+# ==================== Cell 2: 批量生成可视化图像 ====================
+
+print("\n" + "=" * 70)
+print("【步骤 2/2】开始批量生成可视化图像")
+print("=" * 70)
+
+for result in gradient_results:
+    idx = result['idx']
+    cyclone = result['cyclone_info']
+    saliency_grads = result['gradients']
+    physics_data = result['physics_data']
+    physics_time_idx = result['physics_time_idx']
+
+    print(f"\n【{idx + 1}/{len(gradient_results)}】生成可视化: {cyclone['time']} ({cyclone['data_type']})")
 
     # 生成可视化
     save_filename = f"physics_ai_alignment_{idx:02d}_{cyclone['time'].replace(' ', '_').replace(':', '')}.png"
@@ -768,7 +807,7 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
     )
 
 print("\n" + "=" * 70)
-print("✓ 所有物理-AI对齐分析图生成完成!")
+print("✓ 所有可视化图像生成完成!")
 print("=" * 70)
 
 
