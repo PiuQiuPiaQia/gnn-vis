@@ -519,7 +519,6 @@ if 'time' in example_batch.coords:
     print(f"时间坐标dtype: {time_coord.values.dtype}")
     
     import pandas as pd
-    from datetime import datetime, timedelta
     
     # 检查时间坐标的类型
     if np.issubdtype(time_coord.values.dtype, np.timedelta64):
@@ -711,6 +710,116 @@ print("训练强迫：", train_forcings.dims.mapping)
 print("评估输入：   ", eval_inputs.dims.mapping)
 print("评估目标：  ", eval_targets.dims.mapping)
 print("评估强迫项: ", eval_forcings.dims.mapping)
+
+# ============================================================================
+# 打印 train_inputs 和 train_targets 的时间信息
+# ============================================================================
+print("\n" + "="*80)
+print("训练数据时间信息")
+print("="*80)
+
+import pandas as pd
+
+# 从文件名中提取参考日期
+file_parts = parse_file_parts(dataset_file.value.removesuffix(".nc"))
+reference_time = None
+if 'date' in file_parts:
+    reference_time = pd.Timestamp(file_parts['date'])
+    print(f"\n📅 数据集参考日期: {reference_time.strftime('%Y-%m-%d')}")
+
+# 打印 train_inputs 的时间
+print("\n🔹 train_inputs 包含的时间点:")
+if 'time' in train_inputs.coords:
+    train_input_times = train_inputs.coords['time'].values
+    print(f"   时间点数量: {len(train_input_times)}")
+    
+    for i, t in enumerate(train_input_times):
+        if np.issubdtype(train_input_times.dtype, np.timedelta64):
+            hours_offset = t / np.timedelta64(1, 'h')
+            if reference_time is not None:
+                abs_time = reference_time + pd.Timedelta(t)
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h -> 绝对时间: {abs_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            else:
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h")
+        else:
+            dt = pd.Timestamp(t).to_pydatetime()
+            print(f"   [{i}] {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+else:
+    print("   ⚠️ train_inputs 没有 time 坐标")
+
+# 打印 train_targets 的时间
+print("\n🔹 train_targets 包含的时间点:")
+if 'time' in train_targets.coords:
+    train_target_times = train_targets.coords['time'].values
+    print(f"   时间点数量: {len(train_target_times)}")
+    
+    for i, t in enumerate(train_target_times):
+        if np.issubdtype(train_target_times.dtype, np.timedelta64):
+            hours_offset = t / np.timedelta64(1, 'h')
+            if reference_time is not None:
+                abs_time = reference_time + pd.Timedelta(t)
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h -> 绝对时间: {abs_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            else:
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h")
+        else:
+            dt = pd.Timestamp(t).to_pydatetime()
+            print(f"   [{i}] {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+else:
+    print("   ⚠️ train_targets 没有 time 坐标")
+
+# ============================================================================
+# 打印 eval_inputs 和 eval_targets 的时间信息
+# ============================================================================
+print("\n" + "="*80)
+print("评估数据时间信息")
+print("="*80)
+
+# 打印 eval_inputs 的时间
+print("\n🔹 eval_inputs 包含的时间点:")
+if 'time' in eval_inputs.coords:
+    eval_input_times = eval_inputs.coords['time'].values
+    print(f"   时间点数量: {len(eval_input_times)}")
+    
+    for i, t in enumerate(eval_input_times):
+        if np.issubdtype(eval_input_times.dtype, np.timedelta64):
+            hours_offset = t / np.timedelta64(1, 'h')
+            if reference_time is not None:
+                abs_time = reference_time + pd.Timedelta(t)
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h -> 绝对时间: {abs_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            else:
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h")
+        else:
+            dt = pd.Timestamp(t).to_pydatetime()
+            print(f"   [{i}] {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+else:
+    print("   ⚠️ eval_inputs 没有 time 坐标")
+
+# 打印 eval_targets 的时间
+print("\n🔹 eval_targets 包含的时间点:")
+if 'time' in eval_targets.coords:
+    eval_target_times = eval_targets.coords['time'].values
+    print(f"   时间点数量: {len(eval_target_times)}")
+    
+    for i, t in enumerate(eval_target_times):
+        if np.issubdtype(eval_target_times.dtype, np.timedelta64):
+            hours_offset = t / np.timedelta64(1, 'h')
+            if reference_time is not None:
+                abs_time = reference_time + pd.Timedelta(t)
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h -> 绝对时间: {abs_time.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+            else:
+                print(f"   [{i}] 相对时间: +{hours_offset:6.1f}h")
+        else:
+            dt = pd.Timestamp(t).to_pydatetime()
+            print(f"   [{i}] {dt.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+else:
+    print("   ⚠️ eval_targets 没有 time 坐标")
+
+# 补充说明
+print("\n💡 说明:")
+print("   - eval_inputs 固定包含2个连续时间点 (用于预测的输入)")
+print("   - eval_targets 包含多个预测目标时间点 (由 eval_steps 参数决定)")
+print("   - 时间间隔为6小时")
+print("="*80 + "\n")
 
 
 # In[19]:

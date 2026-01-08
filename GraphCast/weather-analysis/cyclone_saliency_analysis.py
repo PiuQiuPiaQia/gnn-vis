@@ -67,12 +67,12 @@ dir_path_dataset = "/root/data/dataset"
 dir_path_stats = "/root/data/stats"
 
 # 使用小模型以避免内存溢出
-# params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
-# dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
+params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
+dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
 
 # 如果内存充足，可以使用高分辨率模型（需要 >32GB GPU 内存）
-params_file = "params-GraphCast - ERA5 1979-2017 - resolution 0.25 - pressure levels 37 - mesh 2to6 - precipitation input and output.npz"
-dataset_file = "dataset-source-era5_date-2022-01-01_res-0.25_levels-37_steps-04.nc"
+# params_file = "params-GraphCast - ERA5 1979-2017 - resolution 0.25 - pressure levels 37 - mesh 2to6 - precipitation input and output.npz"
+# dataset_file = "dataset-source-era5_date-2022-01-01_res-0.25_levels-37_steps-04.nc"
 
 # %%
 # ==================== 台风眼坐标配置 ====================
@@ -114,7 +114,8 @@ CYCLONE_CENTERS = [
 ]
 
 # 数据网格分辨率
-GRID_RESOLUTION = 0.25  # 度 (与数据集分辨率一致: res-1.0)
+# GRID_RESOLUTION = 0.25  # 度 (与数据集分辨率一致: res-1.0)
+GRID_RESOLUTION = 1
 # 注意：如果切换到高分辨率数据，需要改为 GRID_RESOLUTION = 0.25
 
 # 可视化配置
@@ -174,19 +175,19 @@ with open(f"{dir_path_dataset}/{dataset_file}", "rb") as f:
 print("数据维度:", example_batch.dims.mapping)
 
 # %%
-# ==================== 提取训练数据 ====================
+# ==================== 提取评估数据 ====================
 
 # 增加预测步数以获取更多时间点的数据
 # 原数据集包含 4 个预测步: +6h, +12h, +18h, +24h
-train_steps = 4
+eval_steps = 4
 
-train_inputs, train_targets, train_forcings = data_utils.extract_inputs_targets_forcings(
+eval_inputs, eval_targets, eval_forcings = data_utils.extract_inputs_targets_forcings(
     example_batch,
-    target_lead_times=slice("6h", f"{train_steps*6}h"),
+    target_lead_times=slice("6h", f"{eval_steps*6}h"),
     **dataclasses.asdict(task_config)
 )
 
-print("Train Inputs:", train_inputs.dims.mapping)
+print("Eval Inputs:", eval_inputs.dims.mapping)
 
 # %%
 # ==================== 加载归一化统计数据 ====================
@@ -735,13 +736,13 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
         # 输入时间点：梯度目标是第一个预测步 (+6h = 12Z)
         grad_target_time_idx = 0
         # 物理场使用输入数据
-        physics_data = train_inputs
+        physics_data = eval_inputs
         physics_time_idx = cyclone['input_time_idx']
     else:
         # 预测时间点：梯度目标是对应的预测步
         grad_target_time_idx = cyclone['target_time_idx']
         # 物理场使用目标数据 (ERA5 真实值)
-        physics_data = train_targets
+        physics_data = eval_targets
         physics_time_idx = cyclone['target_time_idx']
 
     # 计算梯度（最耗时的操作）
@@ -750,9 +751,9 @@ for idx, cyclone in enumerate(CYCLONE_CENTERS):
     start_time = time.time()
 
     saliency_grads = compute_saliency_map(
-        inputs=train_inputs,
-        targets=train_targets,
-        forcings=train_forcings,
+        inputs=eval_inputs,
+        targets=eval_targets,
+        forcings=eval_forcings,
         target_idx=(target_lat_idx, target_lon_idx),
         target_variable=TARGET_VARIABLE,
         target_level=TARGET_LEVEL,
