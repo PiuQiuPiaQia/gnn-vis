@@ -35,6 +35,7 @@ from typing import Optional, Tuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+from scipy.ndimage import gaussian_filter
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import xarray
@@ -57,6 +58,13 @@ import haiku as hk
 from latlon_utils import latlon_to_index, index_to_latlon
 # 导入区域数据提取工具
 from region_utils import extract_region_data, extract_annulus_mean
+# 导入滑动窗口梯度分析模块
+from sliding_window_saliency import (
+    SlidingWindowSaliencyAnalyzer,
+    SlidingWindowConfig,
+    GradientResult,
+    compute_sliding_gradients
+)
 
 print("JAX devices:", jax.devices())
 
@@ -582,15 +590,18 @@ def plot_physics_ai_alignment(
     lats_grad = grad_region.lat.values
     lons_grad = grad_region.lon.values
     grad_vals = grad_region.values
-    
-    # 使用 robust 百分位数设置颜色范围
-    vmin_pct = np.percentile(grad_vals, 2)
-    vmax_pct = np.percentile(grad_vals, 98)
-    vabs = max(abs(vmin_pct), abs(vmax_pct))
-    
-    im = ax.imshow(grad_vals, extent=[lons_grad.min(), lons_grad.max(), 
-                                      lats_grad.min(), lats_grad.max()],
-                   origin='lower', cmap='RdBu_r', vmin=-vabs, vmax=vabs,
+
+    # 关键修改 1: 高斯平滑（滤除噪点，保留气团结构）
+    # sigma=1.5 约对应 ~150km 平滑尺度（中尺度天气系统量级）
+    grad_smoothed = gaussian_filter(grad_vals, sigma=1.5)
+
+    # 关键修改 2: Robust 归一化（去掉极值干扰，增强红蓝对比）
+    vmin, vmax = np.percentile(grad_smoothed, [2, 98])
+    limit = max(abs(vmin), abs(vmax))  # 保证 0 在中间
+
+    extent = [lons_grad.min(), lons_grad.max(), lats_grad.min(), lats_grad.max()]
+    im = ax.imshow(grad_smoothed, extent=extent,
+                   origin='lower', cmap='RdBu_r', vmin=-limit, vmax=limit,
                    alpha=0.6, transform=ccrs.PlateCarree(), zorder=2)
     
     cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, shrink=0.8)
@@ -707,74 +718,70 @@ def plot_physics_ai_alignment(
 
 
 # %%
-# ==================== Cell 1: 批量计算所有时间点的梯度 (反向传播) ====================
+# ==================== Cell 1: 使用滑动窗口计算梯度 (反向传播) ====================
+# ============================================================================
+# 滑动窗口梯度分析原理:
+# 
+# 【原始方法】固定输入梯度分析:
+#     固定输入(00Z+06Z) → 12Z预测 → 18Z预测 → 次日00Z预测
+#                          ↑所有梯度都回溯到这里
+#     问题: 所有预测的梯度都回溯到初始输入，无法分析时间局部的因果关系
+# 
+# 【滑动窗口方法】:
+#     窗口1: 00Z+06Z → 12Z预测 (梯度: 00Z/06Z 如何影响 12Z)
+#     窗口2: 06Z+12Z → 18Z预测 (梯度: 06Z/12Z 如何影响 18Z)  
+#     窗口3: 12Z+18Z → 次日00Z (梯度: 12Z/18Z 如何影响 次日00Z)
+#            ↑每次用前两个真实时间点作为新输入
+# 
+# 优点:
+#     1. 时间局部性: 分析相邻时间点的因果影响
+#     2. 动态追踪: 跟随台风移动路径分析每步的驱动因素
+#     3. 物理解释性: 更接近"当前状态如何影响下一状态"的因果关系
+# ============================================================================
 
 print("\n" + "=" * 70)
-print("【步骤 1/2】开始批量计算梯度（反向传播）")
+print("【步骤 1/2】开始滑动窗口梯度计算（反向传播）")
 print("=" * 70)
 
-# 存储所有时间点的梯度和元数据
+# 使用滑动窗口梯度分析模块
+sliding_window_results = compute_sliding_gradients(
+    model_forward_fn=run_forward_jitted,
+    task_config=task_config,
+    eval_inputs=eval_inputs,
+    eval_targets=eval_targets,
+    eval_forcings=eval_forcings,
+    cyclone_centers=CYCLONE_CENTERS,
+    target_variable=TARGET_VARIABLE,
+    target_level=TARGET_LEVEL,
+    negative_gradient=NEGATIVE_GRADIENT,
+    grid_resolution=GRID_RESOLUTION,
+    verbose=True
+)
+
+# 转换为与原有可视化函数兼容的格式
 gradient_results = []
-
-for idx, cyclone in enumerate(CYCLONE_CENTERS):
-    print(f"\n【{idx + 1}/{len(CYCLONE_CENTERS)}】计算时间点: {cyclone['time']} ({cyclone['data_type']})")
-
-    # 计算目标点索引
-    target_lat_idx, target_lon_idx = latlon_to_index(
-        lat=cyclone['lat'],
-        lon=cyclone['lon'],
-        resolution=GRID_RESOLUTION,
-        lat_min=-90.0,
-        lon_min=0.0
-    )
-
-    print(f"  台风眼坐标: ({cyclone['lat']:.4f}°, {cyclone['lon']:.4f}°)")
-    print(f"  网格索引: (lat_idx={target_lat_idx}, lon_idx={target_lon_idx})")
-
-    # 根据是输入还是预测时间点，确定梯度计算的目标时间索引
-    if cyclone.get('is_input', True):
-        # 输入时间点：梯度目标是第一个预测步 (+6h = 12Z)
-        grad_target_time_idx = 0
-        # 物理场使用输入数据
-        physics_data = eval_inputs
-        physics_time_idx = cyclone['input_time_idx']
-    else:
-        # 预测时间点：梯度目标是对应的预测步
-        grad_target_time_idx = cyclone['target_time_idx']
-        # 物理场使用目标数据 (ERA5 真实值)
-        physics_data = eval_targets
-        physics_time_idx = cyclone['target_time_idx']
-
-    # 计算梯度（最耗时的操作）
-    print(f"  计算梯度 (target_time_idx={grad_target_time_idx})...")
-    import time
-    start_time = time.time()
-
-    saliency_grads = compute_saliency_map(
-        inputs=eval_inputs,
-        targets=eval_targets,
-        forcings=eval_forcings,
-        target_idx=(target_lat_idx, target_lon_idx),
-        target_variable=TARGET_VARIABLE,
-        target_level=TARGET_LEVEL,
-        target_time_idx=grad_target_time_idx,
-        negative=NEGATIVE_GRADIENT
-    )
-
-    elapsed = time.time() - start_time
-    print(f"  ✓ 梯度计算完成 (耗时: {elapsed:.2f}s)")
-
-    # 保存梯度结果和元数据
+for result in sliding_window_results:
+    # 获取对应的台风信息（只处理预测时间点）
+    prediction_centers = [c for c in CYCLONE_CENTERS if not c.get('is_input', True)]
+    cyclone = prediction_centers[result.window_idx]
+    
+    # 确定物理场数据源
+    # 滑动窗口的输入数据包含了前两个时间点的真实观测
+    physics_data = result.input_data  # 使用滑动窗口的输入数据
+    physics_time_idx = 1  # 使用第二个时间点（更接近预测目标）
+    
     gradient_results.append({
-        'idx': idx,
+        'idx': result.window_idx,
         'cyclone_info': cyclone,
-        'gradients': saliency_grads,
+        'gradients': result.gradients,
         'physics_data': physics_data,
-        'physics_time_idx': physics_time_idx
+        'physics_time_idx': physics_time_idx,
+        'input_times': result.input_times,  # 新增：记录输入时间窗口
+        'target_time': result.target_time,  # 新增：记录预测目标时间
     })
 
 print("\n" + "=" * 70)
-print(f"✓ 所有梯度计算完成！共 {len(gradient_results)} 个时间点")
+print(f"✓ 滑动窗口梯度计算完成！共 {len(gradient_results)} 个窗口")
 print("=" * 70)
 
 
@@ -791,14 +798,25 @@ for result in gradient_results:
     saliency_grads = result['gradients']
     physics_data = result['physics_data']
     physics_time_idx = result['physics_time_idx']
+    
+    # 获取滑动窗口的时间信息
+    input_times = result.get('input_times', ['?', '?'])
+    target_time = result.get('target_time', cyclone['time'])
 
-    print(f"\n【{idx + 1}/{len(gradient_results)}】生成可视化: {cyclone['time']} ({cyclone['data_type']})")
+    print(f"\n【窗口 {idx + 1}/{len(gradient_results)}】")
+    print(f"  输入时间窗口: {input_times}")
+    print(f"  预测目标时间: {target_time}")
+    print(f"  台风位置: ({cyclone['lat']:.2f}°, {cyclone['lon']:.2f}°)")
 
-    # 生成可视化
-    save_filename = f"physics_ai_alignment_{idx:02d}_{cyclone['time'].replace(' ', '_').replace(':', '')}.png"
+    # 生成可视化文件名（包含滑动窗口信息）
+    save_filename = f"sliding_window_{idx:02d}_{target_time.replace(' ', '_').replace(':', '')}.png"
+
+    # 更新 cyclone_info 以包含滑动窗口信息
+    cyclone_info_extended = cyclone.copy()
+    cyclone_info_extended['data_type'] = f"窗口{idx+1}: {' + '.join(input_times)} → {target_time}"
 
     plot_physics_ai_alignment(
-        cyclone_info=cyclone,
+        cyclone_info=cyclone_info_extended,
         gradients=saliency_grads,
         era5_data=physics_data,
         gradient_var='geopotential',  # 与 TARGET_VARIABLE 保持一致,物理逻辑自洽
