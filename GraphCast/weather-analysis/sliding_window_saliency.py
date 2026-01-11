@@ -121,7 +121,7 @@ class GradientResult:
     target_location: Tuple[float, float]  # 目标位置 (lat, lon)
     gradients: Dataset  # 梯度数据
     input_data: Dataset  # 用于该窗口的输入数据
-    elapsed_time: float  # 计算耗时（秒）
+    elapsed_time: float = 0.0  # 计算耗时（秒）
 
 
 # ============================================================================
@@ -156,7 +156,8 @@ class SlidingWindowSaliencyAnalyzer:
         
     def _create_single_step_targets_template(
         self,
-        reference_targets: Dataset
+        reference_targets: Dataset,
+        time_idx: int = 0
     ) -> Dataset:
         """
         创建单步预测的目标模板
@@ -167,8 +168,11 @@ class SlidingWindowSaliencyAnalyzer:
         Returns:
             单步预测的目标模板（填充NaN）
         """
-        # 只保留第一个时间步
-        single_step_targets = reference_targets.isel(time=slice(0, 1))
+        if 'time' in reference_targets.dims:
+            actual_idx = min(time_idx, len(reference_targets.time) - 1)
+            single_step_targets = reference_targets.isel(time=slice(actual_idx, actual_idx + 1))
+        else:
+            single_step_targets = reference_targets
         # 填充 NaN
         return single_step_targets * np.nan
     
@@ -197,14 +201,18 @@ class SlidingWindowSaliencyAnalyzer:
         self,
         eval_inputs: Dataset,
         eval_targets: Dataset,
+        eval_forcings: Dataset,
         window_idx: int
     ) -> Dataset:
         """
         构造滚动窗口的输入数据
         
         核心逻辑:
-        - 将 eval_inputs 和 eval_targets 合并成完整时间序列
-        - 从统一数组中切片取出连续的2个时间点
+        - 将 eval_inputs 与「后续真实数据」拼成完整时间序列后做切片：
+          - 目标变量（targets variables）从 eval_targets 补齐
+          - forcing 变量从 eval_forcings 补齐（注意 forcing 不在 eval_targets 中）
+        - 对每个变量从统一序列中切片取出连续的2个时间点
+        - 常量变量（如 geopotential_at_surface）保持无 time 维度
         
         时间序列示例:
         全序列: [00Z, 06Z, 12Z, 18Z, 次日00Z]
@@ -217,26 +225,104 @@ class SlidingWindowSaliencyAnalyzer:
         Args:
             eval_inputs: 原始输入数据 (包含2个时间点: 00Z, 06Z)
             eval_targets: 目标数据 (包含多个时间点: 12Z, 18Z, ...)
+            eval_forcings: 强迫项数据 (包含多个时间点的 forcings 变量)
             window_idx: 窗口索引
             
         Returns:
-            该窗口的输入数据 (2个时间点)
+            该窗口的输入数据 (2个时间点, 包含 forcings 变量)
         """
-        # 方法1: 如果是第一个窗口，直接返回原始输入（避免拼接）
+        # 方法1: 如果是第一个窗口，直接返回原始输入（不合并 forcings）
+        # forcings 通过单独参数传递给模型，更符合 GraphCast 原始设计
         if window_idx == 0:
+            # 调试：打印 window_idx=0 时的变量信息
+            print(f"\n  【调试 window=0】eval_inputs 变量:")
+            print(f"    总变量数: {len(list(eval_inputs.data_vars))}")
+            for var in eval_inputs.data_vars:
+                v = eval_inputs[var]
+                time_info = f", time={len(v.time)}" if 'time' in v.dims else ""
+                print(f"    - {var}: dims={v.dims}{time_info}")
             return eval_inputs
         
-        # 方法2: 合并 inputs 和 targets 成完整时间序列
-        # 完整序列: [inp[0], inp[1], tgt[0], tgt[1], tgt[2], ...]
-        full_timeseries = xarray.concat([eval_inputs, eval_targets], dim='time')
+        # 识别常量变量（无时间维度的变量）和时间依赖变量
+        constant_var_names = set()
+        time_dependent_var_names = set()
         
-        # 从完整序列中切片取窗口
-        # window_idx=1: 需要索引 [1, 2] = [06Z, 12Z]
-        # window_idx=2: 需要索引 [2, 3] = [12Z, 18Z]
-        start_idx = window_idx
-        end_idx = window_idx + 2
+        for var_name in eval_inputs.data_vars:
+            var = eval_inputs[var_name]
+            if 'time' not in var.dims:
+                # 常量变量：直接复制（如 geopotential_at_surface）
+                constant_var_names.add(var_name)
+            else:
+                # 时间依赖变量：需要从时间序列中提取
+                time_dependent_var_names.add(var_name)
         
-        rolling_inputs = full_timeseries.isel(time=slice(start_idx, end_idx))
+        # 构建新的输入数据集
+        rolling_data = {}
+        
+        # 1. 处理常量变量：始终从原始 inputs 复制（保持无时间维度）
+        for var_name in constant_var_names:
+            rolling_data[var_name] = eval_inputs[var_name]
+        
+        # 2. 处理时间依赖变量：从统一时间序列中切片
+        debug_printed = False  # 只打印一次
+        input_time_len = len(eval_inputs.time) if "time" in eval_inputs.dims else None
+
+        for var_name in time_dependent_var_names:
+            input_var = eval_inputs[var_name]
+
+            # targets 变量在 eval_targets 中；forcing 变量在 eval_forcings 中
+            continuation_var = None
+            if var_name in eval_targets.data_vars:
+                continuation_var = eval_targets[var_name]
+            elif var_name in eval_forcings.data_vars:
+                continuation_var = eval_forcings[var_name]
+
+            # 如果没有后续真实数据可补齐，则退化为使用 inputs 的最后2个时间点
+            if continuation_var is None or "time" not in continuation_var.dims:
+                window_data = input_var.isel(time=slice(-2, None))
+            else:
+                full_var = xarray.concat([input_var, continuation_var], dim="time")
+
+                # 切片取窗口：确保只取2个连续时间点
+                # window_idx=0: 取索引 [0, 1]
+                # window_idx=1: 取索引 [1, 2]
+                # window_idx=2: 取索引 [2, 3]
+                start_idx = window_idx
+                end_idx = window_idx + 2
+                window_data = full_var.isel(time=slice(start_idx, end_idx))
+
+                # 关键调试：在窗口1时打印第一个变量的切片信息
+                if window_idx == 1 and not debug_printed:  # 只打印一次
+                    print(f"\n  【调试】时间序列合并详情 (变量: {var_name}):")
+                    print(f"    input_var.time 长度: {len(input_var.time)}")
+                    print(f"    continuation_var.time 长度: {len(continuation_var.time)}")
+                    print(f"    full_var.time 长度: {len(full_var.time)}")
+                    print(f"    切片索引: [{start_idx}:{end_idx}]")
+                    print(f"    期望结果长度: 2")
+                    print(f"    实际 window_data.time 长度: {len(window_data.time)}")
+
+                    if len(window_data.time) != 2:
+                        print(f"\n  【错误】时间维度长度不匹配！")
+                        print(f"    full_var.time 值: {full_var.time.values}")
+                        print(f"    window_data.time 值: {window_data.time.values}")
+
+                    debug_printed = True
+
+            # 严格检查窗口长度，避免后续 silent broadcast 产生错误结果
+            if "time" in window_data.dims:
+                if input_time_len is not None and len(window_data.time) != input_time_len:
+                    raise ValueError(
+                        f"window_idx={window_idx} 时变量 {var_name} 的 time 长度为 {len(window_data.time)}，"
+                        f"但 eval_inputs.time 长度为 {input_time_len}；请检查 eval_steps/cyclone_centers 是否匹配。"
+                    )
+
+            rolling_data[var_name] = window_data
+        
+        # 注意：forcings 不合并到 inputs 中，而是通过单独参数传递给模型
+        # 这更符合 GraphCast 原始设计：forcings 用于预测目标，只需要1个时间点
+        
+        # 合并成 Dataset
+        rolling_inputs = xarray.Dataset(rolling_data)
         
         return rolling_inputs
     
@@ -343,10 +429,21 @@ class SlidingWindowSaliencyAnalyzer:
             print("\n" + "=" * 70)
             print("【滑动窗口梯度分析】开始计算")
             print("=" * 70)
-            print(f"输入时间点: 2 个 (来自 eval_inputs)")
-            print(f"预测时间点: {len(prediction_centers)} 个")
+            print(f"输入时间点: {len(eval_inputs.time)} 个 (来自 eval_inputs)")
+            print(f"目标时间点: {len(eval_targets.time)} 个 (来自 eval_targets)")
+            print(f"强迫项时间点: {len(eval_forcings.time) if 'time' in eval_forcings.dims else '无时间维度'}")
+            print(f"预测中心点: {len(prediction_centers)} 个")
             print(f"目标变量: {config.target_variable} @ {config.target_level}hPa")
             print(f"负梯度: {config.negative_gradient}")
+            
+            # 打印 forcings 包含的变量
+            print(f"\nForcings 变量列表:")
+            for var_name in eval_forcings.data_vars:
+                var = eval_forcings[var_name]
+                dims_info = f"dims={var.dims}"
+                if 'time' in var.dims:
+                    dims_info += f", time长度={len(var.time)}"
+                print(f"  - {var_name}: {dims_info}")
         
         for window_idx, cyclone in enumerate(prediction_centers):
             if verbose:
@@ -354,10 +451,21 @@ class SlidingWindowSaliencyAnalyzer:
                 print(f"  目标时间: {cyclone['time']}")
                 print(f"  台风位置: ({cyclone['lat']:.4f}°, {cyclone['lon']:.4f}°)")
             
-            # 1. 构造滚动窗口输入
+            # 1. 构造滚动窗口输入（包含 forcings 变量）
             rolling_inputs = self._construct_rolling_inputs(
-                eval_inputs, eval_targets, window_idx
+                eval_inputs, eval_targets, eval_forcings, window_idx
             )
+            
+            # 调试：检查常量变量是否仍有时间维度
+            if verbose and window_idx > 0:
+                print(f"  调试信息：检查常量变量")
+                for var_name in rolling_inputs.data_vars:
+                    var = rolling_inputs[var_name]
+                    if 'time' in var.dims:
+                        time_len = len(var.time)
+                        print(f"    - {var_name}: 有 time 维度 (长度={time_len})")
+                    else:
+                        print(f"    - {var_name}: 无 time 维度 ✓")
             
             # 记录输入时间点
             if window_idx == 0:
@@ -375,9 +483,11 @@ class SlidingWindowSaliencyAnalyzer:
             
             if verbose:
                 print(f"  输入窗口: {input_times}")
-            
+
             # 2. 创建单步目标模板和强迫项
-            targets_template = self._create_single_step_targets_template(eval_targets)
+            targets_template = self._create_single_step_targets_template(
+                eval_targets, time_idx=cyclone.get('target_time_idx', 0)
+            )
             forcings = self._create_single_step_forcings(
                 eval_forcings, cyclone.get('target_time_idx', 0)
             )
@@ -396,7 +506,7 @@ class SlidingWindowSaliencyAnalyzer:
             
             # 4. 计算梯度
             start_time = time_module.time()
-            
+
             grads = self._compute_single_window_gradient(
                 inputs=rolling_inputs,
                 targets_template=targets_template,
@@ -404,12 +514,12 @@ class SlidingWindowSaliencyAnalyzer:
                 target_idx=(target_lat_idx, target_lon_idx),
                 target_time_idx=0  # 单步预测，始终为0
             )
-            
+
             elapsed = time_module.time() - start_time
-            
+
             if verbose:
                 print(f"  ✓ 梯度计算完成 (耗时: {elapsed:.2f}s)")
-            
+
             # 5. 保存结果
             result = GradientResult(
                 window_idx=window_idx,

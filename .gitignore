@@ -166,3 +166,5 @@ cython_debug/
 /GraphCast/graphcast/
 */data/*
 .DS_Store
+
+opencode.json

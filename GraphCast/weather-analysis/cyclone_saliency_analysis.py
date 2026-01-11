@@ -40,6 +40,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import xarray
 
+# 配置中文字体
+plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
 # Cartopy 用于地图绘制
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -318,6 +322,7 @@ def plot_physics_ai_alignment(
     gradients,
     era5_data,
     gradient_var: str = '2m_temperature',
+    gradient_level: int = 500,
     time_idx: int = 0,
     all_cyclone_centers: Optional[list] = None,
     save_path: Optional[str] = None
@@ -333,7 +338,7 @@ def plot_physics_ai_alignment(
         time_idx: 时间索引，用于从多时间步数据中选择对应的时间
                   - 0: 对应输入数据的第一个时间步 (-6h = 00Z)
                   - 1: 对应输入数据的第二个时间步 (0h = 06Z)
-        all_cyclone_centers: 所有台风中心点列表，用于绘制台风路径
+        all_cyclone_centers: 所有台风中心点列表，用于绘制真实台风路径
         save_path: 保存路径
     """
     target_lat = cyclone_info['lat']
@@ -591,34 +596,34 @@ def plot_physics_ai_alignment(
     lons_grad = grad_region.lon.values
     grad_vals = grad_region.values
 
-    # 关键修改 1: 高斯平滑（滤除噪点，保留气团结构）
-    # sigma=1.5 约对应 ~150km 平滑尺度（中尺度天气系统量级）
-    grad_smoothed = gaussian_filter(grad_vals, sigma=1.5)
+    # 轻微高斯平滑（sigma=0.5，保留细节）
+    smooth_grad = gaussian_filter(grad_vals, sigma=0.5)
 
-    # 关键修改 2: Robust 归一化（去掉极值干扰，增强红蓝对比）
-    vmin, vmax = np.percentile(grad_smoothed, [2, 98])
-    limit = max(abs(vmin), abs(vmax))  # 保证 0 在中间
+    # 色标范围：保留层次细节，避免饱和
+    vmin, vmax = np.percentile(smooth_grad, [5, 95])
+    limit = max(abs(vmin), abs(vmax))
 
     extent = [lons_grad.min(), lons_grad.max(), lats_grad.min(), lats_grad.max()]
-    im = ax.imshow(grad_smoothed, extent=extent,
+    im = ax.imshow(smooth_grad, extent=extent,
                    origin='lower', cmap='RdBu_r', vmin=-limit, vmax=limit,
-                   alpha=0.6, transform=ccrs.PlateCarree(), zorder=2)
-    
-    cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, shrink=0.8)
-    cbar.set_label(f'{gradient_var} Gradient (AI Saliency)', fontsize=11)
+                   interpolation='bilinear',
+                   alpha=0.7, transform=ccrs.PlateCarree(), zorder=2)
 
-    # 9. 绘制台风路径线
+    cbar = plt.colorbar(im, ax=ax, orientation='horizontal', pad=0.05, shrink=0.8)
+    cbar.set_label(f'Saliency (Gradient of {gradient_level}hPa {gradient_var})', fontsize=11)
+
+    # 9. 绘制台风路径线（真实观测路径）
     if all_cyclone_centers is not None and len(all_cyclone_centers) > 1:
-        # 提取所有台风中心点的经纬度
+        # 提取所有台风中心点的经纬度（真实观测）
         track_lons = [c['lon'] for c in all_cyclone_centers]
         track_lats = [c['lat'] for c in all_cyclone_centers]
 
-        # 绘制台风路径线
+        # 绘制真实台风路径线（紫色实线）
         ax.plot(track_lons, track_lats, color='purple', linewidth=2.5,
                linestyle='-', marker='o', markersize=6, markerfacecolor='white',
                markeredgecolor='purple', markeredgewidth=2,
                transform=ccrs.PlateCarree(), zorder=4, alpha=0.8,
-               label='台风路径')
+               label='真实台风路径')
 
         # 在每个点旁边标注时间
         for i, c in enumerate(all_cyclone_centers):
@@ -661,8 +666,8 @@ def plot_physics_ai_alignment(
         u_norm, v_norm = 0, 0
 
     ax.arrow(target_lon, target_lat, u_norm, v_norm,
-             head_width=0.8, head_length=1.2, fc='yellow', ec='black',
-             linewidth=2.5, transform=ccrs.PlateCarree(), zorder=6,
+             head_width=1.0, head_length=1.4, fc='yellow', ec='black',
+             linewidth=3.0, transform=ccrs.PlateCarree(), zorder=6,
              label=f'台风移动趋势 (引导气流 {wind_speed:.1f} m/s)')
 
     print(f"  箭头绘制: 从 ({target_lon:.1f}, {target_lat:.1f}) 指向 ({target_lon+u_norm:.1f}, {target_lat+v_norm:.1f})")
@@ -696,7 +701,7 @@ def plot_physics_ai_alignment(
         legend_elements.append(
             plt.Line2D([0], [0], color='purple', linewidth=2.5, marker='o',
                       markersize=6, markerfacecolor='white', markeredgecolor='purple',
-                      markeredgewidth=2, label='台风路径')
+                      markeredgewidth=2, label='真实台风路径')
         )
 
     legend_elements.extend([
@@ -706,7 +711,13 @@ def plot_physics_ai_alignment(
                   markersize=12, markeredgecolor='black', markeredgewidth=1.5,
                   label=f'台风移动趋势 ({wind_speed:.1f} m/s, {wind_angle:.0f}°)')
     ])
-    ax.legend(handles=legend_elements, loc='upper right', fontsize=10, framealpha=0.9)
+    ax.legend(handles=legend_elements,
+              loc='upper right',
+              bbox_to_anchor=(1.0, 1.0),
+              fontsize=9,
+              framealpha=0.95,
+              fancybox=True,
+              shadow=True)
     
     plt.tight_layout()
     
@@ -758,26 +769,26 @@ sliding_window_results = compute_sliding_gradients(
     verbose=True
 )
 
-# 转换为与原有可视化函数兼容的格式
+# ==================== 转换梯度结果为可视化格式 ====================
 gradient_results = []
+
 for result in sliding_window_results:
     # 获取对应的台风信息（只处理预测时间点）
     prediction_centers = [c for c in CYCLONE_CENTERS if not c.get('is_input', True)]
     cyclone = prediction_centers[result.window_idx]
-    
+
     # 确定物理场数据源
-    # 滑动窗口的输入数据包含了前两个时间点的真实观测
-    physics_data = result.input_data  # 使用滑动窗口的输入数据
-    physics_time_idx = 1  # 使用第二个时间点（更接近预测目标）
-    
+    physics_data = result.input_data
+    physics_time_idx = 1
+
     gradient_results.append({
         'idx': result.window_idx,
         'cyclone_info': cyclone,
         'gradients': result.gradients,
         'physics_data': physics_data,
         'physics_time_idx': physics_time_idx,
-        'input_times': result.input_times,  # 新增：记录输入时间窗口
-        'target_time': result.target_time,  # 新增：记录预测目标时间
+        'input_times': result.input_times,
+        'target_time': result.target_time,
     })
 
 print("\n" + "=" * 70)
@@ -821,7 +832,7 @@ for result in gradient_results:
         era5_data=physics_data,
         gradient_var='geopotential',  # 与 TARGET_VARIABLE 保持一致,物理逻辑自洽
         time_idx=physics_time_idx,  # 使用正确的物理场时间索引
-        all_cyclone_centers=CYCLONE_CENTERS,  # 传入所有台风中心点用于绘制路径
+        all_cyclone_centers=CYCLONE_CENTERS,  # 传入所有台风中心点用于绘制真实路径
         save_path=save_filename
     )
 
