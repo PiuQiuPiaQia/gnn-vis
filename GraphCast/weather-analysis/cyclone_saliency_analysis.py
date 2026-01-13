@@ -69,6 +69,11 @@ from sliding_window_saliency import (
     GradientResult,
     compute_sliding_gradients
 )
+# 导入台风路径预测模块
+from cyclone_track_prediction import (
+    extract_cyclone_center_from_prediction,
+    predict_cyclone_track
+)
 
 print("JAX devices:", jax.devices())
 
@@ -105,24 +110,24 @@ dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.n
 #     - 01/02 06:00 (转换后: +24h)  ← 预测24小时后
 # -------------------------------------------------------------------------------
 # 
-# 台风 Cyclone Seth 各时间点坐标:
+# 台风 Cyclone Seth 各时间点坐标（从ERA5数据集提取）:
 # Date (UTC)  |  Lat      |  Lon      | Pressure (mb) | Wind (kt) | Category | 数据类型
 # -----------------------------------------------------------------------------------
-# 01/01 00Z   | -21.2215  | 156.7095  |    997.0      |    40     |   TS     | 输入
-# 01/01 06Z   | -21.7810  | 157.4565  |    996.0      |    40     |   TS     | 输入（参考点）
-# 01/01 12Z   | -22.5571  | 158.2946  |   1000.0      |    35     |   TS     | 预测目标
-# 01/01 18Z   | -23.9132  | 158.8048  |    998.0      |    35     |   TS     | 预测目标
-# 01/02 00Z   | -25.8306  | 159.0052  |    992.0      |    40     |   TS     | 预测目标
+# 01/01 00Z   | -21.3138  | 156.6947  |    997.0      |    40     |   TS     | 输入
+# 01/01 06Z   | -21.7054  | 157.5024  |    996.0      |    40     |   TS     | 输入（参考点）
+# 01/01 12Z   | -22.5048  | 158.2994  |   1000.0      |    35     |   TS     | 预测目标
+# 01/01 18Z   | -23.9030  | 158.8031  |    998.0      |    35     |   TS     | 预测目标
+# 01/02 00Z   | -25.8032  | 159.0031  |    992.0      |    40     |   TS     | 预测目标
 # 01/02 06Z   | (未提供)  | (未提供)  |      -        |     -     |   -      | 预测目标
 # 
 # 当前配置: 使用输入数据的2个时间点 + 预测目标时间点进行梯度分析
 CYCLONE_CENTERS = [
-    {"time": "2022-01-01 00Z", "lat": -21.2215, "lon": 156.7095, "pressure": 997.0, "wind_speed": 40, "category": "TS", "data_type": "输入(-6h)", "is_input": True, "input_time_idx": 0},
-    {"time": "2022-01-01 06Z", "lat": -21.7810, "lon": 157.4565, "pressure": 996.0, "wind_speed": 40, "category": "TS", "data_type": "输入(0h)", "is_input": True, "input_time_idx": 1},
+    {"time": "2022-01-01 00Z", "lat": -21.3138, "lon": 156.6947, "pressure": 997.0, "wind_speed": 40, "category": "TS", "data_type": "输入(-6h)", "is_input": True, "input_time_idx": 0},
+    {"time": "2022-01-01 06Z", "lat": -21.7054, "lon": 157.5024, "pressure": 996.0, "wind_speed": 40, "category": "TS", "data_type": "输入(0h)", "is_input": True, "input_time_idx": 1},
     # 以下是预测目标时间点
-    {"time": "2022-01-01 12Z", "lat": -22.5571, "lon": 158.2946, "pressure": 1000.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+6h)", "is_input": False, "target_time_idx": 0},
-    {"time": "2022-01-01 18Z", "lat": -23.9132, "lon": 158.8048, "pressure": 998.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+12h)", "is_input": False, "target_time_idx": 1},
-    {"time": "2022-01-02 00Z", "lat": -25.8306, "lon": 159.0052, "pressure": 992.0, "wind_speed": 40, "category": "TS", "data_type": "预测(+18h)", "is_input": False, "target_time_idx": 2},
+    {"time": "2022-01-01 12Z", "lat": -22.5048, "lon": 158.2994, "pressure": 1000.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+6h)", "is_input": False, "target_time_idx": 0},
+    {"time": "2022-01-01 18Z", "lat": -23.9030, "lon": 158.8031, "pressure": 998.0, "wind_speed": 35, "category": "TS", "data_type": "预测(+12h)", "is_input": False, "target_time_idx": 1},
+    {"time": "2022-01-02 00Z", "lat": -25.8032, "lon": 159.0031, "pressure": 992.0, "wind_speed": 40, "category": "TS", "data_type": "预测(+18h)", "is_input": False, "target_time_idx": 2},
 ]
 
 # 数据网格分辨率
@@ -325,20 +330,26 @@ def plot_physics_ai_alignment(
     gradient_level: int = 500,
     time_idx: int = 0,
     all_cyclone_centers: Optional[list] = None,
+    departure_cyclone_info: Optional[dict] = None,
+    predicted_cyclone_centers: Optional[list] = None,
     save_path: Optional[str] = None
 ):
     """
     绘制物理-AI对齐分析图
 
     Args:
-        cyclone_info: 台风信息字典 {time, lat, lon, intensity}
+        cyclone_info: 台风信息字典 {time, lat, lon, intensity} - 预测目标时刻的台风位置
         gradients: 梯度数据 (xarray Dataset)
         era5_data: ERA5 气象数据
         gradient_var: 用于可视化的梯度变量
-        time_idx: 时间索引，用于从多时间步数据中选择对应的时间
-                  - 0: 对应输入数据的第一个时间步 (-6h = 00Z)
-                  - 1: 对应输入数据的第二个时间步 (0h = 06Z)
+        time_idx: 时间索引，用于选择引导气流的时间步（即"出发时刻"）
+                  - 在滑动窗口中，time_idx=1 表示选择窗口的第二个时间步
+                  - 例如：窗口[00Z, 06Z]预测12Z时，time_idx=1 选择06Z的风场
+                  - 含义：黄色箭头显示的是台风"出发时刻"的环境引导气流
         all_cyclone_centers: 所有台风中心点列表，用于绘制真实台风路径
+        departure_cyclone_info: "出发时刻"的台风信息字典 - 黄色箭头将从这个位置出发
+                                如果为None，则使用 cyclone_info（向后兼容）
+        predicted_cyclone_centers: 预测的台风中心点列表，用于绘制预测台风路径
         save_path: 保存路径
     """
     target_lat = cyclone_info['lat']
@@ -523,6 +534,17 @@ def plot_physics_ai_alignment(
     INNER_RADIUS = 2.0  # 度（优化后参数，原为 3.0°）
     OUTER_RADIUS = 5.0  # 度（优化后参数，原为 7.0°）
 
+    # 确定环形区域的中心：使用"出发时刻"的台风位置（如果提供）
+    if departure_cyclone_info is not None:
+        annulus_center_lat = departure_cyclone_info['lat']
+        annulus_center_lon = departure_cyclone_info['lon']
+        print(f"  环形区域中心: 出发时刻台风位置 ({annulus_center_lat:.2f}°, {annulus_center_lon:.2f}°)")
+    else:
+        # 向后兼容：如果没有提供，使用预测目标位置
+        annulus_center_lat = target_lat
+        annulus_center_lon = target_lon
+        print(f"  环形区域中心: 预测目标位置 ({annulus_center_lat:.2f}°, {annulus_center_lon:.2f}°)")
+
     print(f"  计算环形区域平均引导风 (半径 {INNER_RADIUS}°-{OUTER_RADIUS}°, DLM)...")
 
     # 对每个气压层的风场，计算环形区域平均
@@ -533,10 +555,10 @@ def plot_physics_ai_alignment(
         u_layer = u_wind_3d.sel(level=level, method='nearest')
         v_layer = v_wind_3d.sel(level=level, method='nearest')
 
-        # 计算环形区域平均
-        u_mean = extract_annulus_mean(u_layer, target_lat, target_lon,
+        # 计算环形区域平均：使用"出发时刻"的台风位置作为中心
+        u_mean = extract_annulus_mean(u_layer, annulus_center_lat, annulus_center_lon,
                                        INNER_RADIUS, OUTER_RADIUS)
-        v_mean = extract_annulus_mean(v_layer, target_lat, target_lon,
+        v_mean = extract_annulus_mean(v_layer, annulus_center_lat, annulus_center_lon,
                                        INNER_RADIUS, OUTER_RADIUS)
 
         u_annulus_layers.append(u_mean)
@@ -635,25 +657,75 @@ def plot_physics_ai_alignment(
                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
                             edgecolor='purple', alpha=0.7))
 
-    # 10. 绘制当前台风眼标记
+    # 9.5 绘制预测台风路径线
+    if predicted_cyclone_centers is not None and len(predicted_cyclone_centers) > 0:
+        # 提取所有预测台风中心点的经纬度
+        pred_track_lons = [c['lon'] for c in predicted_cyclone_centers]
+        pred_track_lats = [c['lat'] for c in predicted_cyclone_centers]
+
+        # 绘制预测台风路径线（绿色虚线）
+        ax.plot(pred_track_lons, pred_track_lats, color='green', linewidth=2.5,
+               linestyle='--', marker='s', markersize=6, markerfacecolor='lightgreen',
+               markeredgecolor='green', markeredgewidth=2,
+               transform=ccrs.PlateCarree(), zorder=4, alpha=0.8,
+               label='AI预测路径')
+
+        # 在每个点旁边标注时间（绿色）
+        for i, c in enumerate(predicted_cyclone_centers):
+            # 提取时间标签 (例如 "00Z", "06Z")
+            time_str = c['time'].split()[-1] if ' ' in c['time'] else c['time']
+            ax.text(c['lon'] - 0.8, c['lat'] - 0.8, f"预测\n{time_str}",
+                   fontsize=8, color='green', fontweight='bold',
+                   transform=ccrs.PlateCarree(), zorder=4,
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor='green', alpha=0.7))
+
+    # 10. 绘制当前台风眼标记（预测目标位置）
     ax.scatter(target_lon, target_lat, marker='x', s=400, c='red',
               linewidths=4, transform=ccrs.PlateCarree(), zorder=5,
-              label='当前台风中心')
+              label='预测目标台风位置')
 
-    # 11. 绘制环境引导气流箭头（顺风方向 = 台风移动趋势）
+    # 10.1 绘制"出发时刻"台风位置标记（如果提供）
+    if departure_cyclone_info is not None:
+        ax.scatter(departure_cyclone_info['lon'], departure_cyclone_info['lat'],
+                  marker='o', s=300, facecolors='none', edgecolors='orange',
+                  linewidths=3, transform=ccrs.PlateCarree(), zorder=5,
+                  label='出发时刻台风位置')
+
+    # 11. 绘制出发时刻的环境引导气流箭头
     # ============================================================================
-    # 箭头指向 (u, v)，表示台风移动趋势（气流推动方向）
-    # 物理意义：
+    # 【重要定义】黄色箭头的物理含义：
+    # - 例如：12Z 台风位置的黄色箭头 = 06Z 时刻的环境场引导气流方向
+    # - 含义：在出发的那一刻，物理定律想把它推向哪里
+    #
+    # 时间对应关系（滑动窗口）：
+    # - 窗口1: [00Z, 06Z] → 预测12Z → 黄色箭头显示06Z的风场
+    # - 窗口2: [06Z, 12Z] → 预测18Z → 黄色箭头显示12Z的风场
+    # - 窗口3: [12Z, 18Z] → 预测次日00Z → 黄色箭头显示18Z的风场
+    #
+    # 技术实现：
+    # - time_idx 参数控制选择哪个时间步的风场
+    # - 当前代码使用 physics_time_idx=1，即窗口中第二个时间步（参考点，"现在"）
     # - 环形区域（2-5°）平均风场 = 环境引导气流（排除台风自身环流）
     # - 700 hPa 单层 = 热带风暴的主导引导层（诊断优化结果）
-    # - 顺风方向（u, v）= 台风被推动的方向
-    # - 黄色箭头指向台风下一步可能移动的方向
     #
     # 气象学依据：
     # - Holland (1984): 引导气流 = 环形区域平均风场
     # - 诊断结果：700 hPa 平均误差 14.9°（深层平均 29.5°）
     # - 弱台风/热带风暴的引导层在中低层（700 hPa），强台风才需深层平均
     # ============================================================================
+
+    # 确定箭头起点：使用"出发时刻"的台风位置（如果提供）
+    if departure_cyclone_info is not None:
+        arrow_start_lon = departure_cyclone_info['lon']
+        arrow_start_lat = departure_cyclone_info['lat']
+        departure_time = departure_cyclone_info.get('time', '?')
+        print(f"  箭头起点: 出发时刻 {departure_time} 的台风位置 ({arrow_start_lat:.2f}°, {arrow_start_lon:.2f}°)")
+    else:
+        # 向后兼容：如果没有提供，使用预测目标位置
+        arrow_start_lon = target_lon
+        arrow_start_lat = target_lat
+        print(f"  箭头起点: 预测目标位置 ({arrow_start_lat:.2f}°, {arrow_start_lon:.2f}°)")
 
     # 方法：归一化风向 + 固定箭头长度（方向准确，长度统一）
     arrow_length_deg = 5.0  # 箭头固定长度（度）
@@ -665,12 +737,12 @@ def plot_physics_ai_alignment(
     else:
         u_norm, v_norm = 0, 0
 
-    ax.arrow(target_lon, target_lat, u_norm, v_norm,
+    ax.arrow(arrow_start_lon, arrow_start_lat, u_norm, v_norm,
              head_width=1.0, head_length=1.4, fc='yellow', ec='black',
              linewidth=3.0, transform=ccrs.PlateCarree(), zorder=6,
-             label=f'台风移动趋势 (引导气流 {wind_speed:.1f} m/s)')
+             label=f'出发时刻引导气流 ({wind_speed:.1f} m/s)')
 
-    print(f"  箭头绘制: 从 ({target_lon:.1f}, {target_lat:.1f}) 指向 ({target_lon+u_norm:.1f}, {target_lat+v_norm:.1f})")
+    print(f"  箭头绘制: 从 ({arrow_start_lon:.1f}, {arrow_start_lat:.1f}) 指向 ({arrow_start_lon+u_norm:.1f}, {arrow_start_lat+v_norm:.1f})")
 
     # 12. 添加标题和图例
     pressure_info = f"{cyclone_info['pressure']} mb" if 'pressure' in cyclone_info else ""
@@ -704,13 +776,32 @@ def plot_physics_ai_alignment(
                       markeredgewidth=2, label='真实台风路径')
         )
 
+    # 如果绘制了预测路径，添加到图例
+    if predicted_cyclone_centers is not None and len(predicted_cyclone_centers) > 0:
+        legend_elements.append(
+            plt.Line2D([0], [0], color='green', linewidth=2.5, linestyle='--', marker='s',
+                      markersize=6, markerfacecolor='lightgreen', markeredgecolor='green',
+                      markeredgewidth=2, label='AI预测路径')
+        )
+
     legend_elements.extend([
         plt.Line2D([0], [0], marker='x', color='w', markerfacecolor='red',
-                  markersize=15, markeredgewidth=3, label='当前台风中心'),
+                  markersize=15, markeredgewidth=3, label='预测目标台风位置'),
+    ])
+
+    # 如果提供了"出发时刻"台风位置，添加到图例
+    if departure_cyclone_info is not None:
+        legend_elements.append(
+            plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
+                      markeredgecolor='orange', markersize=12, markeredgewidth=2,
+                      label='出发时刻台风位置')
+        )
+
+    legend_elements.append(
         plt.Line2D([0], [0], marker='>', color='yellow', markerfacecolor='yellow',
                   markersize=12, markeredgecolor='black', markeredgewidth=1.5,
-                  label=f'台风移动趋势 ({wind_speed:.1f} m/s, {wind_angle:.0f}°)')
-    ])
+                  label=f'出发时刻引导气流 ({wind_speed:.1f} m/s, {wind_angle:.0f}°)')
+    )
     ax.legend(handles=legend_elements,
               loc='upper right',
               bbox_to_anchor=(1.0, 1.0),
@@ -729,21 +820,39 @@ def plot_physics_ai_alignment(
 
 
 # %%
+# ==================== Cell 0: 固定初始输入的完整路径预测 ====================
+# ============================================================================
+# 使用固定的初始输入 (00Z + 06Z) 一次性预测所有未来时刻的台风位置
+# 这是真正的"AI预测路径"，不使用任何未来真实数据
+# ============================================================================
+
+predicted_cyclone_centers = predict_cyclone_track(
+    model_forward_fn=run_forward_jitted,
+    eval_inputs=eval_inputs,
+    eval_targets=eval_targets,
+    eval_forcings=eval_forcings,
+    cyclone_centers=CYCLONE_CENTERS,
+    method='mslp',
+    verbose=True
+)
+
+
+# %%
 # ==================== Cell 1: 使用滑动窗口计算梯度 (反向传播) ====================
 # ============================================================================
 # 滑动窗口梯度分析原理:
-# 
+#
 # 【原始方法】固定输入梯度分析:
 #     固定输入(00Z+06Z) → 12Z预测 → 18Z预测 → 次日00Z预测
 #                          ↑所有梯度都回溯到这里
 #     问题: 所有预测的梯度都回溯到初始输入，无法分析时间局部的因果关系
-# 
+#
 # 【滑动窗口方法】:
 #     窗口1: 00Z+06Z → 12Z预测 (梯度: 00Z/06Z 如何影响 12Z)
-#     窗口2: 06Z+12Z → 18Z预测 (梯度: 06Z/12Z 如何影响 18Z)  
+#     窗口2: 06Z+12Z → 18Z预测 (梯度: 06Z/12Z 如何影响 18Z)
 #     窗口3: 12Z+18Z → 次日00Z (梯度: 12Z/18Z 如何影响 次日00Z)
 #            ↑每次用前两个真实时间点作为新输入
-# 
+#
 # 优点:
 #     1. 时间局部性: 分析相邻时间点的因果影响
 #     2. 动态追踪: 跟随台风移动路径分析每步的驱动因素
@@ -751,7 +860,7 @@ def plot_physics_ai_alignment(
 # ============================================================================
 
 print("\n" + "=" * 70)
-print("【步骤 1/2】开始滑动窗口梯度计算（反向传播）")
+print("【步骤 1/3】开始滑动窗口梯度计算（反向传播）")
 print("=" * 70)
 
 # 使用滑动窗口梯度分析模块
@@ -779,6 +888,9 @@ for result in sliding_window_results:
 
     # 确定物理场数据源
     physics_data = result.input_data
+    # physics_time_idx = 1: 选择滑动窗口的第二个时间步（"出发时刻"）
+    # 例如：窗口[00Z, 06Z]预测12Z时，选择06Z的风场作为引导气流
+    # 含义：黄色箭头显示的是台风从"出发时刻"被推向哪里
     physics_time_idx = 1
 
     gradient_results.append({
@@ -800,7 +912,7 @@ print("=" * 70)
 # ==================== Cell 2: 批量生成可视化图像 ====================
 
 print("\n" + "=" * 70)
-print("【步骤 2/2】开始批量生成可视化图像")
+print("【步骤 2/3】开始批量生成可视化图像")
 print("=" * 70)
 
 for result in gradient_results:
@@ -809,7 +921,7 @@ for result in gradient_results:
     saliency_grads = result['gradients']
     physics_data = result['physics_data']
     physics_time_idx = result['physics_time_idx']
-    
+
     # 获取滑动窗口的时间信息
     input_times = result.get('input_times', ['?', '?'])
     target_time = result.get('target_time', cyclone['time'])
@@ -817,7 +929,15 @@ for result in gradient_results:
     print(f"\n【窗口 {idx + 1}/{len(gradient_results)}】")
     print(f"  输入时间窗口: {input_times}")
     print(f"  预测目标时间: {target_time}")
-    print(f"  台风位置: ({cyclone['lat']:.2f}°, {cyclone['lon']:.2f}°)")
+    print(f"  预测目标台风位置: ({cyclone['lat']:.2f}°, {cyclone['lon']:.2f}°)")
+
+    # 找到"出发时刻"的台风位置（滑动窗口第二个时间步）
+    # 窗口0: [00Z(idx=0), 06Z(idx=1)] → 12Z(idx=2), 出发时刻=CYCLONE_CENTERS[1]
+    # 窗口1: [06Z(idx=1), 12Z(idx=2)] → 18Z(idx=3), 出发时刻=CYCLONE_CENTERS[2]
+    # 窗口2: [12Z(idx=2), 18Z(idx=3)] → 次日00Z(idx=4), 出发时刻=CYCLONE_CENTERS[3]
+    departure_cyclone_idx = idx + 1  # physics_time_idx=1 对应窗口第二个时间步
+    departure_cyclone = CYCLONE_CENTERS[departure_cyclone_idx]
+    print(f"  出发时刻台风位置: {departure_cyclone['time']} ({departure_cyclone['lat']:.2f}°, {departure_cyclone['lon']:.2f}°)")
 
     # 生成可视化文件名（包含滑动窗口信息）
     save_filename = f"sliding_window_{idx:02d}_{target_time.replace(' ', '_').replace(':', '')}.png"
@@ -833,11 +953,18 @@ for result in gradient_results:
         gradient_var='geopotential',  # 与 TARGET_VARIABLE 保持一致,物理逻辑自洽
         time_idx=physics_time_idx,  # 使用正确的物理场时间索引
         all_cyclone_centers=CYCLONE_CENTERS,  # 传入所有台风中心点用于绘制真实路径
+        departure_cyclone_info=departure_cyclone,  # 传入"出发时刻"的台风位置
+        predicted_cyclone_centers=predicted_cyclone_centers,  # 传入预测的台风路径
         save_path=save_filename
     )
 
 print("\n" + "=" * 70)
 print("✓ 所有可视化图像生成完成!")
+print("=" * 70)
+
+
+print("\n" + "=" * 70)
+print("✓ 所有分析完成!")
 print("=" * 70)
 
 
