@@ -40,8 +40,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import xarray
 
-# 配置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'DejaVu Sans']
+# 配置中文字体（macOS 使用 PingFang SC）
+plt.rcParams['font.sans-serif'] = ['PingFang SC', 'Arial Unicode MS', 'SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 # Cartopy 用于地图绘制
@@ -320,6 +320,102 @@ def compute_saliency_map(
 
 
 # %%
+# ==================== 辅助函数：计算环形区域平均引导风 ====================
+
+def compute_annulus_steering_flow(
+    wind_data: xarray.Dataset,
+    center_lat: float,
+    center_lon: float,
+    steering_levels: list,
+    inner_radius: float = 2.0,
+    outer_radius: float = 5.0,
+    time_idx: int = 0,
+    use_weighted: bool = False,
+    verbose: bool = True
+) -> tuple:
+    """
+    计算台风中心周围环形区域的深层平均引导风场
+    
+    Args:
+        wind_data: 风场数据 (xarray Dataset)，包含 'u_component_of_wind' 和 'v_component_of_wind'
+        center_lat: 台风中心纬度
+        center_lon: 台风中心经度
+        steering_levels: 引导气流的气压层列表 (hPa)
+        inner_radius: 环形区域内半径 (度)
+        outer_radius: 环形区域外半径 (度)
+        time_idx: 时间索引
+        use_weighted: 是否使用质量加权平均
+        verbose: 是否打印调试信息
+    
+    Returns:
+        (u_mean, v_mean): 环形区域平均的u和v风速分量 (m/s)
+    """
+    # 提取风场数据
+    u_wind_3d = wind_data['u_component_of_wind']
+    v_wind_3d = wind_data['v_component_of_wind']
+    
+    # 处理 Batch 和 Time 维度
+    if 'batch' in u_wind_3d.dims:
+        u_wind_3d = u_wind_3d.isel(batch=0)
+        v_wind_3d = v_wind_3d.isel(batch=0)
+    if 'time' in u_wind_3d.dims:
+        actual_time_idx = min(time_idx, len(u_wind_3d.time) - 1)
+        u_wind_3d = u_wind_3d.isel(time=actual_time_idx)
+        v_wind_3d = v_wind_3d.isel(time=actual_time_idx)
+    
+    # 计算多层环形区域平均
+    u_layers = []
+    v_layers = []
+    weights = []
+    
+    for level in steering_levels:
+        try:
+            # 选择气压层
+            u_layer = u_wind_3d.sel(level=level, method='nearest')
+            v_layer = v_wind_3d.sel(level=level, method='nearest')
+            
+            # 计算环形区域平均
+            u_mean = extract_annulus_mean(u_layer, center_lat, center_lon,
+                                         inner_radius, outer_radius)
+            v_mean = extract_annulus_mean(v_layer, center_lat, center_lon,
+                                         inner_radius, outer_radius)
+            
+            u_layers.append(u_mean)
+            v_layers.append(v_mean)
+            
+            # 质量权重（可选）
+            weight = level / 1000.0 if use_weighted else 1.0
+            weights.append(weight)
+            
+            if verbose:
+                print(f"    - {level:4d} hPa: u={u_mean:6.2f}, v={v_mean:6.2f} m/s")
+        except Exception as e:
+            if verbose:
+                print(f"    - {level:4d} hPa: 跳过 (数据不存在)")
+    
+    # 计算加权平均
+    if len(u_layers) > 0:
+        u_center = sum(u * w for u, w in zip(u_layers, weights)) / sum(weights)
+        v_center = sum(v * w for v, w in zip(v_layers, weights)) / sum(weights)
+        
+        if verbose:
+            import math
+            wind_speed = math.sqrt(u_center**2 + v_center**2)
+            wind_angle = math.atan2(v_center, u_center) * 180 / math.pi
+            if len(steering_levels) == 1:
+                print(f"  环形区域 {steering_levels[0]} hPa 引导风: u={u_center:.2f}, v={v_center:.2f} m/s")
+            else:
+                print(f"  环形区域深层平均引导风 (DLM): u={u_center:.2f}, v={v_center:.2f} m/s")
+            print(f"  风速={wind_speed:.1f} m/s, 风向={wind_angle:.0f}°")
+        
+        return u_center, v_center
+    else:
+        if verbose:
+            print(f"  警告: 无法提取任何气压层数据")
+        return None, None
+
+
+# %%
 # ==================== 物理-AI对齐可视化函数 ====================
 
 def plot_physics_ai_alignment(
@@ -332,6 +428,7 @@ def plot_physics_ai_alignment(
     all_cyclone_centers: Optional[list] = None,
     departure_cyclone_info: Optional[dict] = None,
     predicted_cyclone_centers: Optional[list] = None,
+    predicted_wind_data: Optional[xarray.Dataset] = None,
     save_path: Optional[str] = None
 ):
     """
@@ -350,6 +447,7 @@ def plot_physics_ai_alignment(
         departure_cyclone_info: "出发时刻"的台风信息字典 - 黄色箭头将从这个位置出发
                                 如果为None，则使用 cyclone_info（向后兼容）
         predicted_cyclone_centers: 预测的台风中心点列表，用于绘制预测台风路径
+        predicted_wind_data: 预测的风场数据 (xarray Dataset)，用于绘制预测点的风向箭头
         save_path: 保存路径
     """
     target_lat = cyclone_info['lat']
@@ -547,34 +645,18 @@ def plot_physics_ai_alignment(
 
     print(f"  计算环形区域平均引导风 (半径 {INNER_RADIUS}°-{OUTER_RADIUS}°, DLM)...")
 
-    # 对每个气压层的风场，计算环形区域平均
-    u_annulus_layers = []
-    v_annulus_layers = []
-
-    for level in STEERING_LEVELS:
-        u_layer = u_wind_3d.sel(level=level, method='nearest')
-        v_layer = v_wind_3d.sel(level=level, method='nearest')
-
-        # 计算环形区域平均：使用"出发时刻"的台风位置作为中心
-        u_mean = extract_annulus_mean(u_layer, annulus_center_lat, annulus_center_lon,
-                                       INNER_RADIUS, OUTER_RADIUS)
-        v_mean = extract_annulus_mean(v_layer, annulus_center_lat, annulus_center_lon,
-                                       INNER_RADIUS, OUTER_RADIUS)
-
-        u_annulus_layers.append(u_mean)
-        v_annulus_layers.append(v_mean)
-
-        print(f"    - {level:4d} hPa: u={u_mean:6.2f}, v={v_mean:6.2f} m/s")
-
-    # 计算多层加权平均（简单平均，可改为压力加权）
-    weights = [1.0] * len(STEERING_LEVELS)
-    u_center = sum(u * w for u, w in zip(u_annulus_layers, weights)) / sum(weights)
-    v_center = sum(v * w for v, w in zip(v_annulus_layers, weights)) / sum(weights)
-
-    if len(STEERING_LEVELS) == 1:
-        print(f"  环形区域 {STEERING_LEVELS[0]} hPa 引导风: u={u_center:.2f}, v={v_center:.2f} m/s")
-    else:
-        print(f"  环形区域深层平均引导风 (DLM): u={u_center:.2f}, v={v_center:.2f} m/s")
+    # 使用提取的公共函数计算环形区域平均引导风
+    u_center, v_center = compute_annulus_steering_flow(
+        wind_data=era5_data,
+        center_lat=annulus_center_lat,
+        center_lon=annulus_center_lon,
+        steering_levels=STEERING_LEVELS,
+        inner_radius=INNER_RADIUS,
+        outer_radius=OUTER_RADIUS,
+        time_idx=time_idx,
+        use_weighted=USE_WEIGHTED,
+        verbose=True
+    )
 
     # 调试：计算风向角度
     import math
@@ -744,6 +826,92 @@ def plot_physics_ai_alignment(
 
     print(f"  箭头绘制: 从 ({arrow_start_lon:.1f}, {arrow_start_lat:.1f}) 指向 ({arrow_start_lon+u_norm:.1f}, {arrow_start_lat+v_norm:.1f})")
 
+    # 11.5 绘制当前预测点的风向箭头（蓝色）
+    # 使用与黄色箭头相同的方法：环形区域平均（排除台风自身环流）
+    # 只绘制当前图对应的预测点，而不是所有预测点
+    if predicted_cyclone_centers is not None and predicted_wind_data is not None:
+        print(f"\n  绘制当前预测点的风向箭头（使用环形区域平均）...")
+        
+        # 找到当前图对应的预测点索引
+        # 通过匹配经纬度来找到对应的预测点
+        current_pred_idx = None
+        for i, pred_center in enumerate(predicted_cyclone_centers):
+            # 比较时间或位置来匹配（使用时间更准确）
+            if pred_center['time'] == time_label:
+                current_pred_idx = i
+                break
+        
+        # 如果没有找到匹配的预测点，跳过绘制
+        if current_pred_idx is None:
+            print(f"    警告: 未找到匹配的预测点（时间={time_label}），跳过蓝色箭头绘制")
+        else:
+            pred_center = predicted_cyclone_centers[current_pred_idx]
+            pred_lat = pred_center['lat']
+            pred_lon = pred_center['lon']
+            pred_time = pred_center['time']
+            
+            print(f"    当前预测点: {pred_time} (索引={current_pred_idx})")
+            
+            # 从预测数据中提取该点的风场
+            try:
+                # 使用深层平均风场（与引导气流计算方法一致）
+                u_wind_pred_full = predicted_wind_data['u_component_of_wind']
+                v_wind_pred_full = predicted_wind_data['v_component_of_wind']
+                
+                # 处理 Batch 维度
+                if 'batch' in u_wind_pred_full.dims:
+                    u_wind_pred_full = u_wind_pred_full.isel(batch=0)
+                    v_wind_pred_full = v_wind_pred_full.isel(batch=0)
+                
+                # 选择对应的时间步
+                if 'time' in u_wind_pred_full.dims and current_pred_idx < len(u_wind_pred_full.time):
+                    pred_wind_data_timeselected = predicted_wind_data.isel(time=current_pred_idx) if 'time' in predicted_wind_data.dims else predicted_wind_data
+                else:
+                    pred_wind_data_timeselected = predicted_wind_data
+                
+                # 使用提取的公共函数计算环形区域平均引导风（与黄色箭头方法一致）
+                u_pred_val, v_pred_val = compute_annulus_steering_flow(
+                    wind_data=pred_wind_data_timeselected,
+                    center_lat=pred_lat,
+                    center_lon=pred_lon,
+                    steering_levels=STEERING_LEVELS,
+                    inner_radius=INNER_RADIUS,
+                    outer_radius=OUTER_RADIUS,
+                    time_idx=0,  # 已经选择了时间步，所以这里用0
+                    use_weighted=USE_WEIGHTED,
+                    verbose=False  # 避免打印过多信息
+                )
+                
+                # 如果成功计算了风场，绘制箭头
+                if u_pred_val is not None and v_pred_val is not None:
+                    # 计算风速和风向
+                    wind_speed_pred = math.sqrt(u_pred_val**2 + v_pred_val**2)
+                    wind_angle_pred = math.atan2(v_pred_val, u_pred_val) * 180 / math.pi
+                    
+                    # 归一化并绘制箭头
+                    arrow_length_pred = 4.0  # 预测箭头略短一些
+                    if wind_speed_pred > 0:
+                        u_norm_pred = u_pred_val / wind_speed_pred * arrow_length_pred
+                        v_norm_pred = v_pred_val / wind_speed_pred * arrow_length_pred
+                    else:
+                        u_norm_pred, v_norm_pred = 0, 0
+                    
+                    # 绘制蓝色箭头（预测风向）
+                    ax.arrow(pred_lon, pred_lat, u_norm_pred, v_norm_pred,
+                            head_width=0.8, head_length=1.2, fc='blue', ec='black',
+                            linewidth=2.5, transform=ccrs.PlateCarree(), zorder=6,
+                            alpha=0.8)
+                    
+                    print(f"    ✓ 蓝色箭头已绘制:")
+                    print(f"      位置: ({pred_lat:.1f}°, {pred_lon:.1f}°)")
+                    print(f"      环形区域平均引导风: u={u_pred_val:.2f}, v={v_pred_val:.2f} m/s")
+                    print(f"      风速={wind_speed_pred:.1f} m/s, 风向={wind_angle_pred:.0f}°")
+                
+            except Exception as e:
+                print(f"    警告: 无法提取当前预测点的风场数据: {e}")
+                import traceback
+                traceback.print_exc()
+
     # 12. 添加标题和图例
     pressure_info = f"{cyclone_info['pressure']} mb" if 'pressure' in cyclone_info else ""
     wind_info = f"{cyclone_info['wind_speed']} kt" if 'wind_speed' in cyclone_info else cyclone_info.get('intensity', '')
@@ -761,11 +929,15 @@ def plot_physics_ai_alignment(
                 f'位置: ({target_lat:.2f}°, {target_lon:.2f}°)',
                 fontsize=14, fontweight='bold', pad=15)
     
-    # 创建自定义图例
+    # 创建自定义图例（英文）
+    from matplotlib.colors import LinearSegmentedColormap
+    import matplotlib.cm as cm
+    
     legend_elements = [
-        mpatches.Patch(facecolor='none', edgecolor='blue', linewidth=1.5,
-                      label='等压线 (MSLP)'),
-        mpatches.Patch(facecolor='red', alpha=0.6, label='梯度热力图 (AI)'),
+        plt.Line2D([0], [0], color='blue', linewidth=1.5, linestyle='-',
+                  label='Isobars (MSLP, Blue Lines)'),
+        mpatches.Patch(facecolor='red', edgecolor='blue', alpha=0.6, 
+                      hatch='///', label='Saliency Map (Red=+, Blue=-)'),
     ]
 
     # 如果绘制了台风路径，添加到图例
@@ -773,7 +945,7 @@ def plot_physics_ai_alignment(
         legend_elements.append(
             plt.Line2D([0], [0], color='purple', linewidth=2.5, marker='o',
                       markersize=6, markerfacecolor='white', markeredgecolor='purple',
-                      markeredgewidth=2, label='真实台风路径')
+                      markeredgewidth=2, label='Actual Track')
         )
 
     # 如果绘制了预测路径，添加到图例
@@ -781,12 +953,12 @@ def plot_physics_ai_alignment(
         legend_elements.append(
             plt.Line2D([0], [0], color='green', linewidth=2.5, linestyle='--', marker='s',
                       markersize=6, markerfacecolor='lightgreen', markeredgecolor='green',
-                      markeredgewidth=2, label='AI预测路径')
+                      markeredgewidth=2, label='AI Predicted Track')
         )
 
     legend_elements.extend([
         plt.Line2D([0], [0], marker='x', color='w', markerfacecolor='red',
-                  markersize=15, markeredgewidth=3, label='预测目标台风位置'),
+                  markersize=15, markeredgewidth=3, label='Target Position'),
     ])
 
     # 如果提供了"出发时刻"台风位置，添加到图例
@@ -794,21 +966,30 @@ def plot_physics_ai_alignment(
         legend_elements.append(
             plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='none',
                       markeredgecolor='orange', markersize=12, markeredgewidth=2,
-                      label='出发时刻台风位置')
+                      label='Departure Position')
         )
 
     legend_elements.append(
         plt.Line2D([0], [0], marker='>', color='yellow', markerfacecolor='yellow',
                   markersize=12, markeredgecolor='black', markeredgewidth=1.5,
-                  label=f'出发时刻引导气流 ({wind_speed:.1f} m/s, {wind_angle:.0f}°)')
+                  label=f'Steering Flow ({wind_speed:.1f} m/s, {wind_angle:.0f}°)')
     )
+    
+    # 如果绘制了预测点风向箭头，添加到图例
+    if predicted_cyclone_centers is not None and predicted_wind_data is not None:
+        legend_elements.append(
+            plt.Line2D([0], [0], marker='>', color='blue', markerfacecolor='blue',
+                      markersize=10, markeredgecolor='black', markeredgewidth=1.5,
+                      label='Predicted Wind Direction')
+        )
     ax.legend(handles=legend_elements,
               loc='upper right',
               bbox_to_anchor=(1.0, 1.0),
               fontsize=9,
               framealpha=0.95,
               fancybox=True,
-              shadow=True)
+              shadow=True,
+              prop={'family': ['PingFang SC', 'Arial Unicode MS', 'sans-serif'], 'size': 9})
     
     plt.tight_layout()
     
@@ -835,6 +1016,16 @@ predicted_cyclone_centers = predict_cyclone_track(
     method='mslp',
     verbose=True
 )
+
+# 同时获取完整的预测数据（包含风场），用于绘制预测点的风向箭头
+print("\n正在获取完整预测数据（包含风场）...")
+full_prediction_data = run_forward_jitted(
+    rng=jax.random.PRNGKey(0),
+    inputs=eval_inputs,
+    targets_template=eval_targets * np.nan,
+    forcings=eval_forcings
+)
+print("✓ 预测数据获取完成!")
 
 
 # %%
@@ -955,6 +1146,7 @@ for result in gradient_results:
         all_cyclone_centers=CYCLONE_CENTERS,  # 传入所有台风中心点用于绘制真实路径
         departure_cyclone_info=departure_cyclone,  # 传入"出发时刻"的台风位置
         predicted_cyclone_centers=predicted_cyclone_centers,  # 传入预测的台风路径
+        predicted_wind_data=full_prediction_data,  # 传入预测的风场数据
         save_path=save_filename
     )
 
