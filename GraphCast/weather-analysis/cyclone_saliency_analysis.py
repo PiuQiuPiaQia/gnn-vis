@@ -15,6 +15,64 @@
 """
 
 # %%
+# ==================== 数据集配置 ====================
+
+# 数据集配置字典 - 包含两个分辨率的完整配置
+DATASET_CONFIGS = {
+    "low_res": {
+        # 基本信息
+        "name": "低分辨率 (1.0度, 13层)",
+        "params_file": "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz",
+        "dataset_file": "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc",
+        
+        # 核心参数
+        "grid_resolution": 1.0,      # 网格分辨率（度）
+        "image_dpi": 200,            # 输出图像分辨率
+        
+        # 性能参数（仅作注释说明）
+        # GPU内存需求: 8GB+
+        # 计算时间: 基准 (1x)
+    },
+    
+    "high_res": {
+        # 基本信息
+        "name": "高分辨率 (0.25度, 37层)",
+        "params_file": "params-GraphCast - ERA5 1979-2017 - resolution 0.25 - pressure levels 37 - mesh 2to6 - precipitation input and output.npz",
+        "dataset_file": "dataset-source-era5_date-2022-01-01_res-0.25_levels-37_steps-04.nc",
+        
+        # 核心参数
+        "grid_resolution": 0.25,     # 网格分辨率（度）
+        "image_dpi": 300,            # 输出图像分辨率
+        
+        # 性能参数（仅作注释说明）
+        # GPU内存需求: 32GB+ (需要 V100/A100 级别GPU)
+        # 计算时间: 约 3-4倍于低分辨率
+        # 数据量: 16倍于低分辨率 (721x1440 vs 181x360)
+    }
+}
+
+# ==================== 🎚️ 数据集选择开关 ====================
+# 只需修改下面这一行即可切换数据集！
+DATASET_TYPE = "low_res"  # 可选: "low_res" 或 "high_res"
+# DATASET_TYPE = "high_res"  # ← 取消本行注释并注释上一行，即可切换到高分辨率
+
+# ==================== 自动加载配置 ====================
+if DATASET_TYPE not in DATASET_CONFIGS:
+    raise ValueError(f"❌ 无效的数据集类型: '{DATASET_TYPE}'，可选值: {list(DATASET_CONFIGS.keys())}")
+
+CONFIG = DATASET_CONFIGS[DATASET_TYPE]
+
+# 显示当前配置
+print(f"\n{'='*70}")
+print(f"📊 当前数据集配置: {CONFIG['name']}")
+print(f"{'='*70}")
+print(f"   网格分辨率: {CONFIG['grid_resolution']}°")
+print(f"   图像DPI: {CONFIG['image_dpi']}")
+print(f"   参数文件: {CONFIG['params_file'][:50]}...")
+print(f"   数据文件: {CONFIG['dataset_file'][:50]}...")
+print(f"{'='*70}\n")
+
+# %%
 # ==================== 导入库 ====================
 
 import sys
@@ -83,13 +141,9 @@ dir_path_params = "/root/data/params"
 dir_path_dataset = "/root/data/dataset"
 dir_path_stats = "/root/data/stats"
 
-# 使用小模型以避免内存溢出
-params_file = "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz"
-dataset_file = "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc"
-
-# 如果内存充足，可以使用高分辨率模型（需要 >32GB GPU 内存）
-# params_file = "params-GraphCast - ERA5 1979-2017 - resolution 0.25 - pressure levels 37 - mesh 2to6 - precipitation input and output.npz"
-# dataset_file = "dataset-source-era5_date-2022-01-01_res-0.25_levels-37_steps-04.nc"
+# 使用配置字典中的文件名
+params_file = CONFIG["params_file"]
+dataset_file = CONFIG["dataset_file"]
 
 # %%
 # ==================== 台风眼坐标配置 ====================
@@ -130,10 +184,8 @@ CYCLONE_CENTERS = [
     {"time": "2022-01-02 00Z", "lat": -25.8032, "lon": 159.0031, "pressure": 992.0, "wind_speed": 40, "category": "TS", "data_type": "预测(+18h)", "is_input": False, "target_time_idx": 2},
 ]
 
-# 数据网格分辨率
-# GRID_RESOLUTION = 0.25  # 度 (与数据集分辨率一致: res-1.0)
-GRID_RESOLUTION = 1
-# 注意：如果切换到高分辨率数据，需要改为 GRID_RESOLUTION = 0.25
+# 数据网格分辨率 - 从配置自动加载
+GRID_RESOLUTION = CONFIG["grid_resolution"]
 
 # 可视化配置
 REGION_RADIUS = 15  # 裁剪半径 (度)
@@ -994,7 +1046,7 @@ def plot_physics_ai_alignment(
     plt.tight_layout()
     
     if save_path:
-        plt.savefig(save_path, dpi=200, bbox_inches='tight')
+        plt.savefig(save_path, dpi=CONFIG["image_dpi"], bbox_inches='tight')
         print(f"✓ 图像已保存: {save_path}")
     
     plt.show()
