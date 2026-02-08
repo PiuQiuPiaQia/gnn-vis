@@ -46,6 +46,11 @@ GRADIENT_MODE = getattr(cfg, "GRADIENT_MODE", "signed")
 GRADIENT_X_INPUT = getattr(cfg, "GRADIENT_X_INPUT", False)
 GRADIENT_VARIABLES = getattr(cfg, "GRADIENT_VARIABLES", None)
 GRADIENT_VMAX_QUANTILE = getattr(cfg, "GRADIENT_VMAX_QUANTILE", cfg.HEATMAP_VMAX_QUANTILE)
+GRADIENT_CMAP = getattr(cfg, "GRADIENT_CMAP", "RdBu_r")
+GRADIENT_DIVERGING = getattr(cfg, "GRADIENT_DIVERGING", True)
+GRADIENT_CENTER_WINDOW_DEG = getattr(cfg, "GRADIENT_CENTER_WINDOW_DEG", 10.0)
+GRADIENT_CENTER_SCALE_QUANTILE = getattr(cfg, "GRADIENT_CENTER_SCALE_QUANTILE", 0.99)
+GRADIENT_ALPHA_QUANTILE = getattr(cfg, "GRADIENT_ALPHA_QUANTILE", 0.90)
 # 新增配置：梯度时间聚合方式，默认 "single" 表示取单个时刻（time=0），可选 "mean"
 GRADIENT_TIME_AGG = getattr(cfg, "GRADIENT_TIME_AGG", "single")
 LOCAL_BASELINE_INNER_DEG = getattr(cfg, "LOCAL_BASELINE_INNER_DEG", 5.0)
@@ -231,11 +236,14 @@ def _compute_perturbation_importance(target_vars_local):
 
 
 def _compute_gradient_importance(target_vars_local):
+    """
+    使用 Integrated Gradients 计算重要性
+    IG_i(x) = (x_i - x'_i) × ∫₀¹ ∂f/∂x_i(x' + α(x - x')) dα
+    """
     maps = {var: np.zeros((len(lat_indices), len(lon_indices)), dtype=np.float32) for var in target_vars_local}
     
-    # 需求2：在 compare 模式下强制对齐输入变量
+    # 确定要计算IG的输入变量
     if IMPORTANCE_MODE == "compare":
-        # compare 模式下，gradient 也只计算 cfg.TARGET_VARIABLE 的梯度
         vars_to_grad = [cfg.TARGET_VARIABLE]
     elif GRADIENT_VARIABLES is None:
         vars_to_grad = vars_to_perturb
@@ -245,14 +253,28 @@ def _compute_gradient_importance(target_vars_local):
     if not vars_to_grad:
         raise ValueError("No gradient variables found")
 
-    # 需求6：debug 信息打印
-    print(f"\n=== Gradient Computation Debug ===")
-    print(f"Gradient variables: {vars_to_grad}")
-    print(f"GRADIENT_MODE: {GRADIENT_MODE}")
-    print(f"GRADIENT_X_INPUT: {GRADIENT_X_INPUT}")
-    print(f"GRADIENT_TIME_AGG: {GRADIENT_TIME_AGG}")
-    print(f"PERTURB_TIME: {cfg.PERTURB_TIME}")
-    print(f"PERTURB_LEVELS: {cfg.PERTURB_LEVELS}")
+    # IG配置
+    IG_STEPS = 50  # 积分步数
+    
+    print(f"\n=== Integrated Gradients Computation ===")
+    print(f"IG variables: {vars_to_grad}")
+    print(f"IG steps: {IG_STEPS}")
+    print(f"Baseline: global median")
+
+    # 为每个输入变量创建baseline
+    baseline_inputs = eval_inputs.copy(deep=False)
+    for var_name in vars_to_grad:
+        original_da = eval_inputs[var_name]
+        median_val = float(np.median(original_da.values))
+        baseline_array = np.full_like(original_da.values, median_val)
+        baseline_da = xarray.DataArray(
+            baseline_array,
+            dims=original_da.dims,
+            coords=original_da.coords,
+            attrs=original_da.attrs
+        )
+        baseline_inputs[var_name] = baseline_da
+        print(f"  {var_name}: baseline = {median_val:.2f}")
 
     def _target_scalar(inputs_data, target_var):
         outputs = run_forward_jitted(
@@ -270,98 +292,120 @@ def _compute_gradient_importance(target_vars_local):
         scalar = xarray_jax.unwrap_data(value, require_jax=True)
         return jnp.squeeze(scalar)
 
-    def _grad_for_target(target_var):
+    # 对每个目标变量计算IG
+    for target_var in target_vars_local:
+        print(f"\nComputing IG for target: {target_var}")
+        rhs = float(np.array(_target_scalar(eval_inputs, target_var) - _target_scalar(baseline_inputs, target_var)))
+        lhs_total = 0.0
+        
+        # 创建梯度函数
         def _loss(inputs_data):
             return _target_scalar(inputs_data, target_var)
-
-        grads = jax.grad(_loss)(eval_inputs)
-        return grads
-
-    for var in target_vars_local:
-        grads = _grad_for_target(var)
-        for name in vars_to_grad:
-            grad_da = grads[name]
-            if "batch" in grad_da.dims:
-                grad_da = grad_da.isel(batch=0)
-
-            # 需求3：梯度时间聚合策略调整
-            # 若 PERTURB_TIME == "all"，根据 GRADIENT_TIME_AGG 决定是取单个时刻还是 mean
-            if "time" in grad_da.dims:
-                if cfg.PERTURB_TIME == "all":
-                    if GRADIENT_TIME_AGG == "single":
-                        # 取 time=0 而非 mean
-                        grad_da = grad_da.isel(time=0)
-                        print(f"  {name}: time aggregation -> single (time=0)")
-                    else:
-                        # GRADIENT_TIME_AGG == "mean"
-                        grad_da = grad_da.mean(dim="time")
-                        print(f"  {name}: time aggregation -> mean")
-                else:
-                    grad_da = grad_da.isel(time=int(cfg.PERTURB_TIME))
-                    print(f"  {name}: time selection -> time={cfg.PERTURB_TIME}")
-
-            # 需求3：层聚合策略调整
-            # 优先选择单一 level；若选择得到多个 level 才 mean
-            if "level" in grad_da.dims:
-                level_sel = resolve_level_sel(grad_da, cfg.PERTURB_LEVELS)
-                grad_da = grad_da.isel(level=level_sel)
-                if "level" in grad_da.dims:
-                    # 仍有多个 level，需要聚合
-                    grad_da = grad_da.mean(dim="level")
-                    print(f"  {name}: level aggregation -> mean over selected levels")
-                else:
-                    print(f"  {name}: level selection -> single level")
-
-            # GRADIENT_X_INPUT 处理（乘以输入值）
-            if GRADIENT_X_INPUT:
-                input_da = eval_inputs[name]
-                if "batch" in input_da.dims:
-                    input_da = input_da.isel(batch=0)
-                    
-                # 对 input_da 做同样的时间/层选择以对齐
-                if "time" in input_da.dims:
-                    if cfg.PERTURB_TIME == "all":
-                        if GRADIENT_TIME_AGG == "single":
-                            input_da = input_da.isel(time=0)
-                        else:
-                            input_da = input_da.mean(dim="time")
-                    else:
-                        input_da = input_da.isel(time=int(cfg.PERTURB_TIME))
-                        
-                if "level" in input_da.dims:
-                    level_sel = resolve_level_sel(input_da, cfg.PERTURB_LEVELS)
-                    input_da = input_da.isel(level=level_sel)
-                    if "level" in input_da.dims:
-                        input_da = input_da.mean(dim="level")
-                        
-                grad_da = grad_da * input_da
-
-            # 梯度符号处理
-            if GRADIENT_MODE == "abs":
-                grad_da = np.abs(grad_da)
-
-            # 需求5：使用 isel 而非 sel 来避免 nearest 插值误差
-            # grad_da 的坐标应该和 eval_inputs 一致，所以直接用索引切片
-            grad_region = grad_da.isel(lat=lat_indices, lon=lon_indices)
-            maps[var] += np.array(grad_region)
+        grad_fn = jax.grad(_loss)
+        
+        # 对每个输入变量计算IG
+        for var_name in vars_to_grad:
+            print(f"  Variable: {var_name}")
+            accumulated_grads = None
             
-            # 需求6：打印梯度图的分位数，帮助判断是否被极端值支配
-            grad_flat = np.array(grad_region).ravel()
-            q50 = float(np.percentile(np.abs(grad_flat), 50))
-            q90 = float(np.percentile(np.abs(grad_flat), 90))
-            q99 = float(np.percentile(np.abs(grad_flat), 99))
-            print(f"  {name}: gradient |value| percentiles -> 50%={q50:.6e}, 90%={q90:.6e}, 99%={q99:.6e}")
+            # 沿路径积分
+            for step in range(IG_STEPS):
+                alpha = (step + 1) / IG_STEPS
+                
+                # 创建插值输入
+                interpolated_inputs = baseline_inputs.copy(deep=False)
+                original_da = eval_inputs[var_name]
+                baseline_da = baseline_inputs[var_name]
+                
+                interp_array = np.array(baseline_da.values) + alpha * (
+                    np.array(original_da.values) - np.array(baseline_da.values)
+                )
+                
+                interp_da = xarray.DataArray(
+                    interp_array,
+                    dims=original_da.dims,
+                    coords=original_da.coords,
+                    attrs=original_da.attrs
+                )
+                interpolated_inputs[var_name] = interp_da
+                
+                # 计算梯度
+                grads = grad_fn(interpolated_inputs)
+                grad_da = grads[var_name]
+                
+                if accumulated_grads is None:
+                    accumulated_grads = np.array(grad_da.values)
+                else:
+                    accumulated_grads += np.array(grad_da.values)
+                
+                if (step + 1) % 10 == 0:
+                    print(f"    Step: {step + 1}/{IG_STEPS}")
+            
+            # 计算IG归因：(x - baseline) * avg_gradient
+            avg_grads = accumulated_grads / IG_STEPS
+            diff = np.array(eval_inputs[var_name].values) - np.array(baseline_inputs[var_name].values)
+            ig_attr = diff * avg_grads
 
+            # --- Reduce non-spatial dims by name (robust to dim order) ---
+            # The raw numpy array follows the input DataArray's dim order.
+            # Using xarray avoids accidentally indexing the wrong axis
+            # (e.g. selecting batch/level instead of lat).
+            original_da = eval_inputs[var_name]
+            ig_da_full = xarray.DataArray(
+                ig_attr,
+                dims=original_da.dims,
+                coords=original_da.coords,
+                attrs=original_da.attrs,
+            )
+            lhs_total += float(np.array(ig_da_full.sum().values))
+            ig_da = ig_da_full
+
+            if "batch" in ig_da.dims:
+                ig_da = ig_da.isel(batch=0)
+
+            if "time" in ig_da.dims:
+                if cfg.PERTURB_TIME == "all":
+                    if GRADIENT_TIME_AGG == "mean":
+                        ig_da = ig_da.mean(dim="time")
+                    else:
+                        ig_da = ig_da.isel(time=0)
+                else:
+                    ig_da = ig_da.isel(time=int(cfg.PERTURB_TIME))
+
+            if "level" in ig_da.dims:
+                level_sel = resolve_level_sel(original_da, cfg.PERTURB_LEVELS)
+                ig_da = ig_da.isel(level=level_sel)
+                # Always collapse level to produce a 2D (lat, lon) map.
+                if "level" in ig_da.dims:
+                    ig_da = ig_da.mean(dim="level")
+
+            # 提取区域
+            ig_da = ig_da.transpose("lat", "lon")
+            ig_region = ig_da.isel(lat=lat_indices, lon=lon_indices).values
+            maps[target_var] += ig_region
+            
+            # 统计信息
+            q50 = float(np.percentile(np.abs(ig_region.ravel()), 50))
+            q90 = float(np.percentile(np.abs(ig_region.ravel()), 90))
+            q99 = float(np.percentile(np.abs(ig_region.ravel()), 99))
+            print(f"    IG |attribution| percentiles -> 50%={q50:.6e}, 90%={q90:.6e}, 99%={q99:.6e}")
+
+        rel_err = abs(lhs_total - rhs) / (abs(rhs) + 1e-8)
+        print(
+            "  IG completeness: "
+            f"lhs={lhs_total:.6e}, rhs={rhs:.6e}, rel_err={rel_err:.6%}"
+        )
+
+    # 多变量平均
     maps = {var: (vals / float(len(vars_to_grad))) for var, vals in maps.items()}
     
-    # 需求6：打印最终聚合后的梯度图统计
-    print(f"\n=== Final Gradient Maps Stats ===")
+    print(f"\n=== Final IG Attribution Maps ===")
     for var, val_map in maps.items():
         val_flat = val_map.ravel()
         q50 = float(np.percentile(np.abs(val_flat), 50))
         q90 = float(np.percentile(np.abs(val_flat), 90))
         q99 = float(np.percentile(np.abs(val_flat), 99))
-        print(f"  {var}: final |gradient| percentiles -> 50%={q50:.6e}, 90%={q90:.6e}, 99%={q99:.6e}")
+        print(f"  {var}: final |IG| percentiles -> 50%={q50:.6e}, 90%={q90:.6e}, 99%={q99:.6e}")
     
     return maps
 
@@ -420,20 +464,23 @@ if IMPORTANCE_MODE == "compare":
         time_label = f"out_t={cfg.TARGET_TIME_IDX}, in_t={cfg.PERTURB_TIME}"
         titles = [
             f"Perturbation ({var}, {time_label})",
-            f"Input-Gradient ({var}, {time_label})",
+            f"IG ({var}, {time_label})",
         ]
-        gradient_label = "|d output / d input|" if GRADIENT_MODE == "abs" else "d output / d input"
+        gradient_label = "IG attribution"
         plot_importance_heatmap_dual(
             [importance_das["perturbation"], importance_das["input_gradient"]],
             titles,
             center_lat,
             center_lon,
             compare_path,
-            cmap=cfg.HEATMAP_CMAP,
+            cmap=[cfg.HEATMAP_CMAP, GRADIENT_CMAP],
             dpi=cfg.HEATMAP_DPI,
             vmax_quantile=[cfg.HEATMAP_VMAX_QUANTILE, GRADIENT_VMAX_QUANTILE],
-            diverging=[HEATMAP_DIVERGING, GRADIENT_MODE == "signed"],
+            diverging=[HEATMAP_DIVERGING, GRADIENT_DIVERGING],
             cbar_label=["Δoutput (perturbed - baseline)", gradient_label],
+            center_window_deg=[0.0, GRADIENT_CENTER_WINDOW_DEG],
+            center_s_quantile=[cfg.HEATMAP_VMAX_QUANTILE, GRADIENT_CENTER_SCALE_QUANTILE],
+            alpha_quantile=[None, GRADIENT_ALPHA_QUANTILE],
         )
         print(f"Saved method-compare heatmap: {compare_path}")
     else:
@@ -443,8 +490,8 @@ elif len(target_vars) == 1 and cfg.OUTPUT_PNG:
     da_name = "importance"
     png_path = ROOT_DIR / cfg.OUTPUT_PNG
     if IMPORTANCE_MODE == "input_gradient":
-        title = f"Input-Gradient Importance (t={cfg.TARGET_TIME_IDX}, var={var})"
-        cbar_label = "|d output / d input|" if GRADIENT_MODE == "abs" else "d output / d input"
+        title = f"IG Importance (t={cfg.TARGET_TIME_IDX}, var={var})"
+        cbar_label = "IG attribution"
         vmax_quantile = GRADIENT_VMAX_QUANTILE
     else:
         title = f"Perturbation Importance (t={cfg.TARGET_TIME_IDX}, var={var})"
@@ -457,11 +504,14 @@ elif len(target_vars) == 1 and cfg.OUTPUT_PNG:
         center_lon,
         png_path,
         title,
-        cmap=cfg.HEATMAP_CMAP,
+        cmap=GRADIENT_CMAP if IMPORTANCE_MODE == "input_gradient" else cfg.HEATMAP_CMAP,
         dpi=cfg.HEATMAP_DPI,
         vmax_quantile=vmax_quantile,
-        diverging=HEATMAP_DIVERGING,
+        diverging=GRADIENT_DIVERGING if IMPORTANCE_MODE == "input_gradient" else HEATMAP_DIVERGING,
         cbar_label=cbar_label,
+        center_window_deg=GRADIENT_CENTER_WINDOW_DEG if IMPORTANCE_MODE == "input_gradient" else 0.0,
+        center_s_quantile=GRADIENT_CENTER_SCALE_QUANTILE if IMPORTANCE_MODE == "input_gradient" else cfg.HEATMAP_VMAX_QUANTILE,
+        alpha_quantile=GRADIENT_ALPHA_QUANTILE if IMPORTANCE_MODE == "input_gradient" else None,
     )
     print(f"Saved heatmap: {png_path}")
 
@@ -472,7 +522,7 @@ if IMPORTANCE_MODE != "compare" and len(target_vars) == 2 and OUTPUT_PNG_COMBINE
         f"{target_vars[1]} (t={cfg.TARGET_TIME_IDX})",
     ]
     if IMPORTANCE_MODE == "input_gradient":
-        cbar_label = "|d output / d input|" if GRADIENT_MODE == "abs" else "d output / d input"
+        cbar_label = "IG attribution"
         vmax_quantile = GRADIENT_VMAX_QUANTILE
     else:
         cbar_label = None
@@ -485,18 +535,21 @@ if IMPORTANCE_MODE != "compare" and len(target_vars) == 2 and OUTPUT_PNG_COMBINE
         center_lat,
         center_lon,
         combined_path,
-        cmap=cfg.HEATMAP_CMAP,
+        cmap=GRADIENT_CMAP if IMPORTANCE_MODE == "input_gradient" else cfg.HEATMAP_CMAP,
         dpi=cfg.HEATMAP_DPI,
         vmax_quantile=vmax_quantile,
-        diverging=HEATMAP_DIVERGING,
+        diverging=GRADIENT_DIVERGING if IMPORTANCE_MODE == "input_gradient" else HEATMAP_DIVERGING,
         cbar_label=cbar_label,
+        center_window_deg=GRADIENT_CENTER_WINDOW_DEG if IMPORTANCE_MODE == "input_gradient" else 0.0,
+        center_s_quantile=GRADIENT_CENTER_SCALE_QUANTILE if IMPORTANCE_MODE == "input_gradient" else cfg.HEATMAP_VMAX_QUANTILE,
+        alpha_quantile=GRADIENT_ALPHA_QUANTILE if IMPORTANCE_MODE == "input_gradient" else None,
     )
     print(f"Saved combined heatmap: {combined_path}")
 if IMPORTANCE_MODE != "compare" and OUTPUT_PNG_CARTOPY and len(target_vars) == 1:
     map_path = ROOT_DIR / OUTPUT_PNG_CARTOPY
     if IMPORTANCE_MODE == "input_gradient":
-        title = f"Input-Gradient Importance Map (t={cfg.TARGET_TIME_IDX}, var={target_vars[0]})"
-        cbar_label = "|d output / d input|" if GRADIENT_MODE == "abs" else "d output / d input"
+        title = f"IG Importance Map (t={cfg.TARGET_TIME_IDX}, var={target_vars[0]})"
+        cbar_label = "IG attribution"
         vmax_quantile = GRADIENT_VMAX_QUANTILE
     else:
         title = f"Perturbation Importance Map (t={cfg.TARGET_TIME_IDX}, var={target_vars[0]})"
@@ -509,11 +562,14 @@ if IMPORTANCE_MODE != "compare" and OUTPUT_PNG_CARTOPY and len(target_vars) == 1
             center_lon,
             map_path,
             title,
-            cmap=cfg.HEATMAP_CMAP,
+            cmap=GRADIENT_CMAP if IMPORTANCE_MODE == "input_gradient" else cfg.HEATMAP_CMAP,
             dpi=cfg.HEATMAP_DPI,
             vmax_quantile=vmax_quantile,
-            diverging=HEATMAP_DIVERGING,
+            diverging=GRADIENT_DIVERGING if IMPORTANCE_MODE == "input_gradient" else HEATMAP_DIVERGING,
             cbar_label=cbar_label,
+            center_window_deg=GRADIENT_CENTER_WINDOW_DEG if IMPORTANCE_MODE == "input_gradient" else 0.0,
+            center_s_quantile=GRADIENT_CENTER_SCALE_QUANTILE if IMPORTANCE_MODE == "input_gradient" else cfg.HEATMAP_VMAX_QUANTILE,
+            alpha_quantile=GRADIENT_ALPHA_QUANTILE if IMPORTANCE_MODE == "input_gradient" else None,
         )
         print(f"Saved map heatmap: {map_path}")
     except RuntimeError as exc:
@@ -522,7 +578,7 @@ if IMPORTANCE_MODE != "compare" and OUTPUT_PNG_CARTOPY and len(target_vars) == 1
 # %% Top-N
 if IMPORTANCE_MODE == "compare":
     var = target_vars[0]
-    for mode_name, mode_maps in (("Perturbation", compare_maps["perturbation"]), ("Input-Gradient", compare_maps["input_gradient"])):
+    for mode_name, mode_maps in (("Perturbation", compare_maps["perturbation"]), ("IG", compare_maps["input_gradient"])):
         flat_idx = np.argsort(np.abs(mode_maps[var]).ravel())[::-1][:cfg.TOP_N]
         print(f"\nTop-{cfg.TOP_N} influential grid points for {var} ({mode_name}):")
         for rank, idx in enumerate(flat_idx, start=1):

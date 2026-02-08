@@ -2,7 +2,7 @@
 """Heatmap visualization for perturbation importance."""
 
 from pathlib import Path
-from typing import Optional, Sequence, Union
+from typing import Any, Optional, Sequence, Union, cast
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,18 +17,93 @@ def _expand_param(value, n: int, name: str):
     return [value] * n
 
 
-def _compute_norm(data: np.ndarray, vmax_quantile: Optional[float], diverging: bool):
+def _finite_values(data: np.ndarray) -> np.ndarray:
+    arr = np.asarray(data)
+    if np.ma.isMaskedArray(arr):
+        vals = np.ma.compressed(arr)
+    else:
+        vals = arr.ravel()
+    if vals.size == 0:
+        return vals
+    return vals[np.isfinite(vals)]
+
+
+def _extract_center_window(
+    data: np.ndarray,
+    lat_vals: np.ndarray,
+    lon_vals: np.ndarray,
+    center_lat: float,
+    center_lon: float,
+    window_deg: float,
+) -> np.ndarray:
+    """Return data in a lat/lon window around (center_lat, center_lon)."""
+    if window_deg <= 0:
+        return data
+
+    lat_mask = (lat_vals >= (center_lat - window_deg)) & (lat_vals <= (center_lat + window_deg))
+    dlon = ((lon_vals - center_lon + 180.0) % 360.0) - 180.0
+    lon_mask = np.abs(dlon) <= window_deg
+
+    if not np.any(lat_mask) or not np.any(lon_mask):
+        return data
+
+    return data[np.ix_(lat_mask, lon_mask)]
+
+
+def _safe_abs_quantile(x: np.ndarray, q: float) -> float:
+    vals = _finite_values(x)
+    if vals.size == 0:
+        return 0.0
+    val = float(np.quantile(np.abs(vals), q))
+    if not np.isfinite(val):
+        return 0.0
+    return val
+
+
+def _compute_norm(
+    data: np.ndarray,
+    vmax_quantile: Optional[float],
+    diverging: bool,
+    *,
+    center_window: Optional[np.ndarray] = None,
+    center_s_quantile: float = 0.99,
+):
+    """Compute (vmin, vmax, norm). For diverging plots, uses symmetric limits around 0."""
     if diverging:
-        max_abs = float(np.quantile(np.abs(data), vmax_quantile)) if vmax_quantile is not None else float(np.max(np.abs(data)))
-        vmax = max_abs
-        vmin = -max_abs
+        ref = center_window if center_window is not None else data
+        s = _safe_abs_quantile(ref, center_s_quantile) if vmax_quantile is not None else float(np.max(np.abs(ref)))
+        if s <= 0:
+            s = float(np.max(np.abs(data)))
+        if s <= 0:
+            s = 1e-12
+        vmin = -s
+        vmax = +s
         from matplotlib.colors import TwoSlopeNorm
+
         norm = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax)
     else:
-        vmax = float(np.quantile(data, vmax_quantile)) if vmax_quantile is not None else float(np.max(data))
-        vmin = float(np.min(data))
+        vals = _finite_values(data)
+        if vals.size == 0:
+            vals = np.array([0.0])
+        vmax = float(np.quantile(vals, vmax_quantile)) if vmax_quantile is not None else float(np.max(vals))
+        vmin = float(np.min(vals))
         norm = None
     return vmin, vmax, norm
+
+
+def _apply_transparency_mask(
+    data: np.ndarray,
+    *,
+    window_ref: np.ndarray,
+    alpha_quantile: Optional[float],
+) -> np.ndarray:
+    """Mask small |data| values to transparent (via NaN/masked array)."""
+    if alpha_quantile is None:
+        return data
+    thr = _safe_abs_quantile(window_ref, alpha_quantile)
+    if thr <= 0:
+        return data
+    return np.ma.masked_where(np.abs(data) < thr, data)
 
 
 def plot_importance_heatmap(
@@ -42,6 +117,9 @@ def plot_importance_heatmap(
     vmax_quantile: float = 0.995,
     diverging: bool = False,
     cbar_label: Optional[str] = None,
+    center_window_deg: float = 10.0,
+    center_s_quantile: float = 0.99,
+    alpha_quantile: Optional[float] = None,
 ):
     lat_vals = importance_da.coords["lat"].values
     lon_vals = importance_da.coords["lon"].values
@@ -50,17 +128,27 @@ def plot_importance_heatmap(
     if data.size == 0:
         raise ValueError("importance map is empty")
 
-    vmin, vmax, norm = _compute_norm(data, vmax_quantile, diverging)
+    window = _extract_center_window(data, lat_vals, lon_vals, center_lat, center_lon, center_window_deg)
+    data = _apply_transparency_mask(data, window_ref=window, alpha_quantile=alpha_quantile)
+    vmin, vmax, norm = _compute_norm(
+        np.asarray(data),
+        vmax_quantile,
+        diverging,
+        center_window=window,
+        center_s_quantile=center_s_quantile,
+    )
 
     lat_asc = lat_vals[0] < lat_vals[-1]
     origin = "lower" if lat_asc else "upper"
 
     fig, ax = plt.subplots(figsize=(8, 6), dpi=dpi)
+    cmap_obj = plt.get_cmap(cmap).copy()
+    cmap_obj.set_bad((0.0, 0.0, 0.0, 0.0))
     im = ax.imshow(
         data,
         extent=(lon_vals.min(), lon_vals.max(), lat_vals.min(), lat_vals.max()),
         origin=origin,
-        cmap=cmap,
+        cmap=cmap_obj,
         vmin=None if norm is not None else vmin,
         vmax=None if norm is not None else vmax,
         norm=norm,
@@ -104,6 +192,9 @@ def plot_importance_heatmap_cartopy(
     vmax_quantile: float = 0.995,
     diverging: bool = False,
     cbar_label: Optional[str] = None,
+    center_window_deg: float = 10.0,
+    center_s_quantile: float = 0.99,
+    alpha_quantile: Optional[float] = None,
 ):
     try:
         import cartopy.crs as ccrs
@@ -118,16 +209,26 @@ def plot_importance_heatmap_cartopy(
     if data.size == 0:
         raise ValueError("importance map is empty")
 
-    vmin, vmax, norm = _compute_norm(data, vmax_quantile, diverging)
+    window = _extract_center_window(data, lat_vals, lon_vals, center_lat, center_lon, center_window_deg)
+    data = _apply_transparency_mask(data, window_ref=window, alpha_quantile=alpha_quantile)
+    vmin, vmax, norm = _compute_norm(
+        np.asarray(data),
+        vmax_quantile,
+        diverging,
+        center_window=window,
+        center_s_quantile=center_s_quantile,
+    )
 
     fig = plt.figure(figsize=(8, 6), dpi=dpi)
-    ax = plt.axes(projection=ccrs.PlateCarree())
+    ax = cast(Any, plt.axes(projection=ccrs.PlateCarree()))
 
+    cmap_obj = plt.get_cmap(cmap).copy()
+    cmap_obj.set_bad((0.0, 0.0, 0.0, 0.0))
     mesh = ax.pcolormesh(
         lon_vals,
         lat_vals,
         data,
-        cmap=cmap,
+        cmap=cmap_obj,
         vmin=None if norm is not None else vmin,
         vmax=None if norm is not None else vmax,
         norm=norm,
@@ -181,11 +282,14 @@ def plot_importance_heatmap_dual(
     center_lat: float,
     center_lon: float,
     output_path: Path,
-    cmap: str = "coolwarm",
+    cmap: Union[str, Sequence[str]] = "coolwarm",
     dpi: int = 200,
-    vmax_quantile: Union[float, Sequence[float]] = 0.995,
+    vmax_quantile: Union[Optional[float], Sequence[Optional[float]]] = 0.995,
     diverging: Union[bool, Sequence[bool]] = False,
     cbar_label: Union[Optional[str], Sequence[Optional[str]]] = None,
+    center_window_deg: Union[float, Sequence[float]] = 10.0,
+    center_s_quantile: Union[float, Sequence[float]] = 0.99,
+    alpha_quantile: Union[Optional[float], Sequence[Optional[float]]] = None,
 ):
     if len(importance_list) != 2:
         raise ValueError("plot_importance_heatmap_dual expects exactly 2 maps")
@@ -194,6 +298,10 @@ def plot_importance_heatmap_dual(
     vmax_quantile_list = _expand_param(vmax_quantile, n_panel, "vmax_quantile")
     diverging_list = _expand_param(diverging, n_panel, "diverging")
     cbar_label_list = _expand_param(cbar_label, n_panel, "cbar_label")
+    cmap_list = _expand_param(cmap, n_panel, "cmap")
+    center_window_deg_list = _expand_param(center_window_deg, n_panel, "center_window_deg")
+    center_s_quantile_list = _expand_param(center_s_quantile, n_panel, "center_s_quantile")
+    alpha_quantile_list = _expand_param(alpha_quantile, n_panel, "alpha_quantile")
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), dpi=dpi)
     for i, (ax, importance_da, title) in enumerate(zip(axes, importance_list, titles)):
@@ -204,16 +312,33 @@ def plot_importance_heatmap_dual(
             raise ValueError("importance map is empty")
 
         is_diverging = bool(diverging_list[i])
-        vq = vmax_quantile_list[i]
-        vmin, vmax, norm = _compute_norm(data, vq, is_diverging)
+        vq_item = cast(Any, vmax_quantile_list[i])
+        vq = None if vq_item is None else float(vq_item)
+        panel_window_deg = float(cast(Any, center_window_deg_list[i]))
+        panel_s_quantile = float(cast(Any, center_s_quantile_list[i]))
+        panel_alpha_item = cast(Any, alpha_quantile_list[i])
+        panel_alpha = None if panel_alpha_item is None else float(panel_alpha_item)
+        panel_cmap = str(cast(Any, cmap_list[i]))
+
+        window = _extract_center_window(data, lat_vals, lon_vals, center_lat, center_lon, panel_window_deg)
+        data = _apply_transparency_mask(data, window_ref=window, alpha_quantile=panel_alpha)
+        vmin, vmax, norm = _compute_norm(
+            np.asarray(data),
+            vq,
+            is_diverging,
+            center_window=window,
+            center_s_quantile=panel_s_quantile,
+        )
         lat_asc = lat_vals[0] < lat_vals[-1]
         origin = "lower" if lat_asc else "upper"
 
+        cmap_obj = plt.get_cmap(panel_cmap).copy()
+        cmap_obj.set_bad((0.0, 0.0, 0.0, 0.0))
         im = ax.imshow(
             data,
             extent=(lon_vals.min(), lon_vals.max(), lat_vals.min(), lat_vals.max()),
             origin=origin,
-            cmap=cmap,
+            cmap=cmap_obj,
             vmin=None if norm is not None else vmin,
             vmax=None if norm is not None else vmax,
             norm=norm,
@@ -228,7 +353,7 @@ def plot_importance_heatmap_dual(
         label = cbar_label_list[i]
         if label is None:
             label = "Δoutput (perturbed - baseline)" if is_diverging else "Importance Δoutput"
-        cbar.set_label(label)
+        cbar.set_label(str(label))
         if is_diverging:
             ax.text(
                 0.01,

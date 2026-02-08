@@ -35,6 +35,13 @@ HEATMAP_CMAP = "coolwarm"
 HEATMAP_VMAX_QUANTILE = 0.995
 HEATMAP_DIVERGING = True
 
+# IG/gradient visualization (diverging, 0-centered)
+GRADIENT_CMAP = "RdBu_r"
+GRADIENT_DIVERGING = True
+GRADIENT_CENTER_WINDOW_DEG = 10.0
+GRADIENT_CENTER_SCALE_QUANTILE = 0.99
+GRADIENT_ALPHA_QUANTILE = 0.90
+
 # Importance computation mode
 # - "perturbation": occlusion-based delta output (original behavior)
 # - "input_gradient": input saliency |d output / d input|
