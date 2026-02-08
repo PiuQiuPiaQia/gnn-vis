@@ -1,0 +1,19 @@
+ROI sanity checks (center ROI)
+target_var: mean_sea_level_pressure
+center: lat=-22.50, lon=158.30
+center_window_deg: 10.00
+baseline_mode: local_annulus_median
+perturb_time: all
+patch_radius: 0
+IG steps: 50
+
+[Sign sanity]
+argmax_ig: lat=-24.00, lon=158.00, IG=+2.447417e+01, dy=-1.355469e+01
+argmin_ig: lat=-23.00, lon=158.00, IG=-9.149436e+02, dy=+9.262812e+02
+check dy(argmax IG) < 0: True
+check dy(argmin IG) > 0: True
+
+[Rank consistency]
+rho: +0.189380 (p=1.388e-04)
+rho_shuffled: +0.040729 (p=4.166e-01)
+abs_drop: +0.148651

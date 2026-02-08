@@ -91,6 +91,116 @@ def _compute_norm(
     return vmin, vmax, norm
 
 
+def _build_legend_handles(cmap_obj, diverging: bool, alpha_quantile: Optional[float]):
+    from matplotlib.artist import Artist
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    handles: list[Artist] = [
+        Line2D(
+            [0],
+            [0],
+            marker="x",
+            linestyle="None",
+            markeredgecolor="#00e5ff",
+            markeredgewidth=2,
+            markersize=8,
+            label="Cyclone center",
+        )
+    ]
+
+    if diverging:
+        handles.extend(
+            [
+                Patch(facecolor=cmap_obj(0.90), edgecolor="none", label="Positive impact"),
+                Patch(facecolor=cmap_obj(0.10), edgecolor="none", label="Negative impact"),
+            ]
+        )
+    else:
+        handles.extend(
+            [
+                Patch(facecolor=cmap_obj(0.90), edgecolor="none", label="Higher impact"),
+                Patch(facecolor=cmap_obj(0.20), edgecolor="none", label="Lower impact"),
+            ]
+        )
+
+    if alpha_quantile is not None:
+        handles.append(
+            Patch(
+                facecolor="#d9d9d9",
+                edgecolor="none",
+                label=f"Transparent low-signal (< q={alpha_quantile:.2f})",
+            )
+        )
+    return handles
+
+
+def _build_explanation_text(
+    *,
+    diverging: bool,
+    vmax_quantile: Optional[float],
+    center_window_deg: float,
+    center_s_quantile: float,
+    alpha_quantile: Optional[float],
+) -> str:
+    lines = []
+    if vmax_quantile is None:
+        lines.append("Color scale: full finite range.")
+    else:
+        lines.append(f"Color scale clipped at q={vmax_quantile:.3f}.")
+
+    if diverging:
+        if center_window_deg > 0:
+            lines.append(
+                "Zero-centered limits from cyclone "
+                f"+/-{center_window_deg:g} deg window (|value| q={center_s_quantile:.2f})."
+            )
+        else:
+            lines.append("Zero-centered symmetric color scale.")
+
+    if alpha_quantile is not None:
+        lines.append(f"Cells below |value| q={alpha_quantile:.2f} are transparent.")
+
+    return "\n".join(lines)
+
+
+def _add_legend_and_explanation(
+    ax,
+    *,
+    cmap_obj,
+    diverging: bool,
+    vmax_quantile: Optional[float],
+    center_window_deg: float,
+    center_s_quantile: float,
+    alpha_quantile: Optional[float],
+):
+    ax.legend(
+        handles=_build_legend_handles(cmap_obj, diverging, alpha_quantile),
+        loc="upper right",
+        fontsize=8,
+        framealpha=0.9,
+    )
+
+    explanation = _build_explanation_text(
+        diverging=diverging,
+        vmax_quantile=vmax_quantile,
+        center_window_deg=center_window_deg,
+        center_s_quantile=center_s_quantile,
+        alpha_quantile=alpha_quantile,
+    )
+    if explanation:
+        ax.text(
+            0.01,
+            0.01,
+            explanation,
+            transform=ax.transAxes,
+            va="bottom",
+            ha="left",
+            fontsize=8,
+            bbox={"facecolor": "white", "alpha": 0.75, "edgecolor": "none", "pad": 2.0},
+        )
+
+
 def _apply_transparency_mask(
     data: np.ndarray,
     *,
@@ -154,26 +264,24 @@ def plot_importance_heatmap(
         norm=norm,
         aspect="auto",
     )
-    ax.scatter([center_lon], [center_lat], c="#00e5ff", marker="x", s=80, linewidths=2, label="Cyclone")
+    ax.scatter([center_lon], [center_lat], c="#00e5ff", marker="x", s=80, linewidths=2)
     ax.set_xlabel("Longitude")
     ax.set_ylabel("Latitude")
     ax.set_title(title)
-    ax.legend(loc="upper right")
+    _add_legend_and_explanation(
+        ax,
+        cmap_obj=cmap_obj,
+        diverging=diverging,
+        vmax_quantile=vmax_quantile,
+        center_window_deg=center_window_deg,
+        center_s_quantile=center_s_quantile,
+        alpha_quantile=alpha_quantile,
+    )
     cbar = fig.colorbar(im, ax=ax, shrink=0.85)
     label = cbar_label
     if label is None:
         label = "Δoutput (perturbed - baseline)" if diverging else "Importance |Δoutput|"
     cbar.set_label(label)
-    if diverging:
-        ax.text(
-            0.01,
-            0.99,
-            "red: positive, blue: negative",
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=9,
-        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -243,7 +351,6 @@ def plot_importance_heatmap_cartopy(
         s=70,
         linewidths=2,
         transform=ccrs.PlateCarree(),
-        label="Cyclone",
     )
     ax.set_extent([lon_vals.min(), lon_vals.max(), lat_vals.min(), lat_vals.max()], crs=ccrs.PlateCarree())
     ax.coastlines(resolution="110m", linewidth=0.7)
@@ -253,22 +360,20 @@ def plot_importance_heatmap_cartopy(
     gl.right_labels = False
 
     ax.set_title(title)
-    ax.legend(loc="upper right")
+    _add_legend_and_explanation(
+        ax,
+        cmap_obj=cmap_obj,
+        diverging=diverging,
+        vmax_quantile=vmax_quantile,
+        center_window_deg=center_window_deg,
+        center_s_quantile=center_s_quantile,
+        alpha_quantile=alpha_quantile,
+    )
     cbar = fig.colorbar(mesh, ax=ax, shrink=0.85)
     label = cbar_label
     if label is None:
         label = "Δoutput (perturbed - baseline)" if diverging else "Importance |Δoutput|"
     cbar.set_label(label)
-    if diverging:
-        ax.text(
-            0.01,
-            0.99,
-            "red: positive, blue: negative",
-            transform=ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=9,
-        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -344,26 +449,24 @@ def plot_importance_heatmap_dual(
             norm=norm,
             aspect="auto",
         )
-        ax.scatter([center_lon], [center_lat], c="#00e5ff", marker="x", s=80, linewidths=2, label="Cyclone")
+        ax.scatter([center_lon], [center_lat], c="#00e5ff", marker="x", s=80, linewidths=2)
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
         ax.set_title(title)
-        ax.legend(loc="upper right")
+        _add_legend_and_explanation(
+            ax,
+            cmap_obj=cmap_obj,
+            diverging=is_diverging,
+            vmax_quantile=vq,
+            center_window_deg=panel_window_deg,
+            center_s_quantile=panel_s_quantile,
+            alpha_quantile=panel_alpha,
+        )
         cbar = fig.colorbar(im, ax=ax, shrink=0.85)
         label = cbar_label_list[i]
         if label is None:
             label = "Δoutput (perturbed - baseline)" if is_diverging else "Importance Δoutput"
         cbar.set_label(str(label))
-        if is_diverging:
-            ax.text(
-                0.01,
-                0.99,
-                "red: positive, blue: negative",
-                transform=ax.transAxes,
-                va="top",
-                ha="left",
-                fontsize=9,
-            )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
