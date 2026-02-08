@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Configuration for cyclone perturbation analysis."""
+"""Configuration for typhoon impact physics analysis."""
 
 DATASET_CONFIGS = {
     "low_res": {

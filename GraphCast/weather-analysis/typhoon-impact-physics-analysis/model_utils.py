@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GraphCast model and data utilities for perturbation analysis."""
+"""GraphCast model and data utilities for typhoon impact analysis."""
 
 import sys
 from pathlib import Path

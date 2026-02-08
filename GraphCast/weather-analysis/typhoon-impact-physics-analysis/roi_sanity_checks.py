@@ -35,7 +35,7 @@ from model_utils import (
     load_normalization_stats,
     build_run_forward,
 )
-from perturbation_utils import (
+from impact_analysis_utils import (
     compute_baseline,
     select_region_indices,
     build_indexer,

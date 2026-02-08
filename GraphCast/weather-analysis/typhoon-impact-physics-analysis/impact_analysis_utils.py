@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Utilities for occlusion-based perturbation scanning."""
+"""Utilities for occlusion-based typhoon impact scanning."""
 
 import numpy as np
 import xarray

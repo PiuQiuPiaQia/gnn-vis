@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Notebook-style entry for cyclone point perturbation analysis."""
+"""Notebook-style entry for typhoon impact physics analysis."""
 
 # %% Imports
 from pathlib import Path
@@ -18,7 +18,7 @@ from model_utils import (
     load_normalization_stats,
     build_run_forward,
 )
-from perturbation_utils import (
+from impact_analysis_utils import (
     compute_baseline,
     select_region_indices,
     build_indexer,

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Heatmap visualization for perturbation importance."""
+"""Heatmap visualization for typhoon impact importance."""
 
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union, cast
