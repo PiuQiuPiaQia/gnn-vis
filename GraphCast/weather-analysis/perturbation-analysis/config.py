@@ -18,9 +18,7 @@ DATASET_CONFIGS = {
 DATASET_TYPE = "low_res"  # "low_res" | "high_res"
 TARGET_TIME_IDX = 0  # 0(+6h),1(+12h),2(+18h),3(+24h)
 TARGET_VARIABLE = "mean_sea_level_pressure"  # default target for single-variable runs
-TARGET_LEVEL = 500  # used only if TARGET_VARIABLE has a level dimension
-TARGET_VARIABLES = ["mean_sea_level_pressure", "geopotential"]
-TARGET_LEVELS = {"geopotential": 500}
+TARGET_VARIABLES = None  # set None to use TARGET_VARIABLE; for compare mode this must resolve to exactly one variable
 REGION_RADIUS_DEG = 15
 PATCH_RADIUS = 0  # 0=single grid, 1=3x3 patch
 PERTURB_TIME = "all"  # "all" or 0/1
@@ -31,9 +29,7 @@ LOCAL_BASELINE_INNER_DEG = 5.0
 LOCAL_BASELINE_OUTER_DEG = 12.0
 LOCAL_BASELINE_MIN_POINTS = 120
 TOP_N = 20
-OUTPUT_PNG = "perturbation_importance.png"
-OUTPUT_PNG_CARTOPY = "perturbation_importance_map.png"
-OUTPUT_PNG_COMBINED = "perturbation_importance_dual.png"
+OUTPUT_PNG_METHOD_COMPARE = "importance_method_compare.png"
 HEATMAP_DPI = 200
 HEATMAP_CMAP = "coolwarm"
 HEATMAP_VMAX_QUANTILE = 0.995
@@ -42,7 +38,8 @@ HEATMAP_DIVERGING = True
 # Importance computation mode
 # - "perturbation": occlusion-based delta output (original behavior)
 # - "input_gradient": input saliency |d output / d input|
-IMPORTANCE_MODE = "perturbation"
+# - "compare": run both methods and draw a side-by-side comparison figure (single target variable only)
+IMPORTANCE_MODE = "compare"
 
 # Input-gradient options
 # - "abs": magnitude-only, non-negative
@@ -56,7 +53,8 @@ GRADIENT_X_INPUT = False
 GRADIENT_VARIABLES = None
 
 # Gradient scaling for visualization (quantile for vmax)
-GRADIENT_VMAX_QUANTILE = 0.995
+# 降低分位数使色标范围更紧凑，让小值也能显示出差异
+GRADIENT_VMAX_QUANTILE = 0.90
 
 # Paths
 DIR_PATH_PARAMS = "/root/data/params"
