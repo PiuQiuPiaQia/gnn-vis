@@ -50,9 +50,9 @@ def build_baseline_indexer(da: xarray.DataArray, time_sel, level_sel):
         elif dim == "level":
             indexer.append(level_sel)
         elif dim == "lat":
-            indexer.append(0)
+            indexer.append(slice(0, 1))
         elif dim == "lon":
-            indexer.append(0)
+            indexer.append(slice(0, 1))
         else:
             indexer.append(slice(None))
     return tuple(indexer)

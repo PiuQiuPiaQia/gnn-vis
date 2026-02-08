@@ -17,8 +17,10 @@ DATASET_CONFIGS = {
 # Experiment config
 DATASET_TYPE = "low_res"  # "low_res" | "high_res"
 TARGET_TIME_IDX = 0  # 0(+6h),1(+12h),2(+18h),3(+24h)
-TARGET_VARIABLE = "mean_sea_level_pressure"  # or "geopotential"
+TARGET_VARIABLE = "mean_sea_level_pressure"  # default target for single-variable runs
 TARGET_LEVEL = 500  # used only if TARGET_VARIABLE has a level dimension
+TARGET_VARIABLES = ["mean_sea_level_pressure", "geopotential"]
+TARGET_LEVELS = {"geopotential": 500}
 REGION_RADIUS_DEG = 15
 PATCH_RADIUS = 0  # 0=single grid, 1=3x3 patch
 PERTURB_TIME = "all"  # "all" or 0/1
@@ -29,9 +31,30 @@ TOP_N = 20
 OUTPUT_NC = "perturbation_importance.nc"
 OUTPUT_PNG = "perturbation_importance.png"
 OUTPUT_PNG_CARTOPY = "perturbation_importance_map.png"
+OUTPUT_PNG_COMBINED = "perturbation_importance_dual.png"
 HEATMAP_DPI = 200
-HEATMAP_CMAP = "magma"
+HEATMAP_CMAP = "coolwarm"
 HEATMAP_VMAX_QUANTILE = 0.995
+HEATMAP_DIVERGING = True
+
+# Importance computation mode
+# - "perturbation": occlusion-based delta output (original behavior)
+# - "input_gradient": input saliency |d output / d input|
+IMPORTANCE_MODE = "perturbation"
+
+# Input-gradient options
+# - "abs": magnitude-only, non-negative
+# - "signed": signed gradient (use diverging colormap)
+GRADIENT_MODE = "abs"
+
+# When True, uses gradient * input instead of raw gradients
+GRADIENT_X_INPUT = False
+
+# If set, only accumulate gradients from these variables (None = all vars with lat/lon)
+GRADIENT_VARIABLES = None
+
+# Gradient scaling for visualization (quantile for vmax)
+GRADIENT_VMAX_QUANTILE = 0.995
 
 # Paths
 DIR_PATH_PARAMS = "/root/data/params"
