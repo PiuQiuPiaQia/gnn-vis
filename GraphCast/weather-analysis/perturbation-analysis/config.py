@@ -26,9 +26,11 @@ PATCH_RADIUS = 0  # 0=single grid, 1=3x3 patch
 PERTURB_TIME = "all"  # "all" or 0/1
 PERTURB_VARIABLES = None  # None = all vars with lat/lon
 PERTURB_LEVELS = None  # None = all levels
-BASELINE_MODE = "spatial_mean"  # "spatial_mean" | "spatial_median"
+BASELINE_MODE = "local_annulus_median"  # "spatial_mean" | "spatial_median" | "local_annulus_mean" | "local_annulus_median"
+LOCAL_BASELINE_INNER_DEG = 5.0
+LOCAL_BASELINE_OUTER_DEG = 12.0
+LOCAL_BASELINE_MIN_POINTS = 120
 TOP_N = 20
-OUTPUT_NC = "perturbation_importance.nc"
 OUTPUT_PNG = "perturbation_importance.png"
 OUTPUT_PNG_CARTOPY = "perturbation_importance_map.png"
 OUTPUT_PNG_COMBINED = "perturbation_importance_dual.png"

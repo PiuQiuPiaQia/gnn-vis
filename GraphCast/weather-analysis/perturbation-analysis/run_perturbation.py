@@ -44,6 +44,9 @@ GRADIENT_MODE = getattr(cfg, "GRADIENT_MODE", "abs")
 GRADIENT_X_INPUT = getattr(cfg, "GRADIENT_X_INPUT", False)
 GRADIENT_VARIABLES = getattr(cfg, "GRADIENT_VARIABLES", None)
 GRADIENT_VMAX_QUANTILE = getattr(cfg, "GRADIENT_VMAX_QUANTILE", cfg.HEATMAP_VMAX_QUANTILE)
+LOCAL_BASELINE_INNER_DEG = getattr(cfg, "LOCAL_BASELINE_INNER_DEG", 5.0)
+LOCAL_BASELINE_OUTER_DEG = getattr(cfg, "LOCAL_BASELINE_OUTER_DEG", 12.0)
+LOCAL_BASELINE_MIN_POINTS = getattr(cfg, "LOCAL_BASELINE_MIN_POINTS", 120)
 
 
 def _match_shape(base_vals: np.ndarray, target_shape) -> np.ndarray:
@@ -73,7 +76,6 @@ if cfg.DATASET_TYPE not in cfg.DATASET_CONFIGS:
 config = cfg.DATASET_CONFIGS[cfg.DATASET_TYPE]
 print(f"\n=== Config: {config['name']} ===")
 print(f"target_time_idx: {cfg.TARGET_TIME_IDX}")
-print(f"target_variable: {cfg.TARGET_VARIABLE}")
 print(f"region_radius_deg: {cfg.REGION_RADIUS_DEG} | patch_radius: {cfg.PATCH_RADIUS}")
 
 ckpt = load_checkpoint(f"{cfg.DIR_PATH_PARAMS}/{config['params_file']}")
@@ -113,6 +115,7 @@ base_outputs = run_forward_jitted(
 )
 
 target_vars = TARGET_VARIABLES if TARGET_VARIABLES else [cfg.TARGET_VARIABLE]
+print(f"target_variables: {', '.join(target_vars)}")
 
 
 def _select_target_data(outputs, var):
@@ -152,7 +155,23 @@ print(f"Spatial vars: {len(vars_to_perturb)}")
 importance_maps = {var: np.zeros((len(lat_indices), len(lon_indices)), dtype=np.float32) for var in target_vars}
 
 if IMPORTANCE_MODE == "perturbation":
-    baseline_ds = compute_baseline(eval_inputs, vars_to_perturb, cfg.BASELINE_MODE)
+    baseline_ds = compute_baseline(
+        eval_inputs,
+        vars_to_perturb,
+        cfg.BASELINE_MODE,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        inner_deg=LOCAL_BASELINE_INNER_DEG,
+        outer_deg=LOCAL_BASELINE_OUTER_DEG,
+        min_points=LOCAL_BASELINE_MIN_POINTS,
+    )
+    if cfg.BASELINE_MODE.startswith("local_annulus"):
+        print(
+            "Local baseline annulus: "
+            f"inner={LOCAL_BASELINE_INNER_DEG:.2f}deg, "
+            f"outer={LOCAL_BASELINE_OUTER_DEG:.2f}deg, "
+            f"min_points={LOCAL_BASELINE_MIN_POINTS}"
+        )
     time_sel = slice(None) if cfg.PERTURB_TIME == "all" else int(cfg.PERTURB_TIME)
 
     print("Scanning perturbations...")
@@ -294,28 +313,6 @@ for var in target_vars:
         name=name,
     )
 
-importance_ds = xarray.Dataset(
-    importance_das,
-    attrs={
-        "target_variables": ",".join(target_vars),
-        "target_levels": str(TARGET_LEVELS),
-        "target_time_idx": cfg.TARGET_TIME_IDX,
-        "center_lat": center_lat,
-        "center_lon": center_lon,
-        "baseline_mode": cfg.BASELINE_MODE,
-        "patch_radius": cfg.PATCH_RADIUS,
-        "region_radius_deg": cfg.REGION_RADIUS_DEG,
-        "importance_mode": IMPORTANCE_MODE,
-        "gradient_mode": GRADIENT_MODE,
-        "gradient_x_input": GRADIENT_X_INPUT,
-        "gradient_variables": ",".join(GRADIENT_VARIABLES) if GRADIENT_VARIABLES else "all",
-    },
-)
-
-output_path = ROOT_DIR / cfg.OUTPUT_NC
-importance_ds.to_netcdf(output_path)
-print(f"Saved importance map: {output_path}")
-
 if len(target_vars) == 1 and cfg.OUTPUT_PNG:
     var = target_vars[0]
     da_name = "importance"
@@ -345,18 +342,14 @@ if len(target_vars) == 1 and cfg.OUTPUT_PNG:
 
 if len(target_vars) == 2 and OUTPUT_PNG_COMBINED:
     da_list = [importance_das[f"importance_{target_vars[0]}"], importance_das[f"importance_{target_vars[1]}"]]
+    titles = [
+        f"{target_vars[0]} (t={cfg.TARGET_TIME_IDX})",
+        f"{target_vars[1]} (t={cfg.TARGET_TIME_IDX})",
+    ]
     if IMPORTANCE_MODE == "input_gradient":
-        titles = [
-            f"{target_vars[0]} (t={cfg.TARGET_TIME_IDX})",
-            f"{target_vars[1]} (t={cfg.TARGET_TIME_IDX})",
-        ]
         cbar_label = "|d output / d input|" if GRADIENT_MODE == "abs" else "d output / d input"
         vmax_quantile = GRADIENT_VMAX_QUANTILE
     else:
-        titles = [
-            f"{target_vars[0]} (t={cfg.TARGET_TIME_IDX})",
-            f"{target_vars[1]} (t={cfg.TARGET_TIME_IDX})",
-        ]
         cbar_label = None
         vmax_quantile = cfg.HEATMAP_VMAX_QUANTILE
 
