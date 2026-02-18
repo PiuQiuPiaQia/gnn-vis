@@ -3,7 +3,7 @@
 
 import numpy as np
 import xarray
-from typing import List, Tuple
+from typing import List
 
 
 def _annulus_mask(lat_vals: np.ndarray, lon_vals: np.ndarray, center_lat: float, center_lon: float, inner_deg: float, outer_deg: float) -> xarray.DataArray:
@@ -63,14 +63,6 @@ def compute_baseline(
         else:
             raise ValueError(f"unsupported BASELINE_MODE: {baseline_mode}")
     return xarray.Dataset(data_vars)
-
-
-def select_region_indices(lat_vals: np.ndarray, lon_vals: np.ndarray, center_lat: float, center_lon: float, radius_deg: float) -> Tuple[np.ndarray, np.ndarray]:
-    lat_mask = (lat_vals >= center_lat - radius_deg) & (lat_vals <= center_lat + radius_deg)
-    lon_dist = ((lon_vals - center_lon + 180) % 360) - 180
-    lon_mask = np.abs(lon_dist) <= radius_deg
-    return np.where(lat_mask)[0], np.where(lon_mask)[0]
-
 
 def build_indexer(da: xarray.DataArray, lat_slice, lon_slice, time_sel, level_sel):
     indexer = []

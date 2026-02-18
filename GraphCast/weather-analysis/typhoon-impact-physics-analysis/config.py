@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""台风影响物理分析的配置文件。"""
+"""台风关键网格点（IG 候选 + 扰动验证）分析配置。"""
 
 DATASET_CONFIGS = {
     "low_res": {
@@ -14,54 +14,51 @@ DATASET_CONFIGS = {
     },
 }
 
-# 实验配置
+# 数据与目标配置
 DATASET_TYPE = "low_res"  # "low_res" | "high_res"
 TARGET_TIME_IDX = 0  # 0(+6h),1(+12h),2(+18h),3(+24h)
-TARGET_VARIABLE = "mean_sea_level_pressure"  # 单变量运行的默认目标变量
-TARGET_VARIABLES = None  # 设为 None 则使用 TARGET_VARIABLE；比较模式下必须解析为恰好一个变量
-REGION_RADIUS_DEG = 15
+TARGET_VARIABLE = "mean_sea_level_pressure"
+TARGET_VARIABLES = None  # None = 使用 TARGET_VARIABLE；可设为多个目标变量做平均目标
+
+# 若目标变量有 level 维，可在此指定；若无 level 维则忽略。
+TARGET_LEVEL = None
+TARGET_LEVELS = {}
+
+# 扰动设置（用于 Top-K 候选点的干预验证）
 PATCH_RADIUS = 0  # 0=单格, 1=3x3 区域
 PERTURB_TIME = "all"  # "all" 或 0/1
 PERTURB_VARIABLES = None  # None = 所有含经纬度的变量
 PERTURB_LEVELS = None  # None = 所有气压层
+
+# 关键网格点排名输出配置（默认直接运行脚本即可）
+TOP_K_CANDIDATES = 200
+TOP_N_REPORT = 20
+INCLUDE_TARGET_INPUTS = False
+OUTPUT_CSV = "validation_results/typhoon_gridpoint_importance_ranking.csv"
+OUTPUT_IG_PNG = "validation_results/typhoon_ig_candidate_score.png"
+OUTPUT_ERF_PNG = "validation_results/typhoon_erf_explanation.png"
+
+# 基线设置：IG 与扰动验证统一使用
 BASELINE_MODE = "local_annulus_median"  # 可选: "spatial_mean" | "spatial_median" | "local_annulus_mean" | "local_annulus_median"
 LOCAL_BASELINE_INNER_DEG = 5.0
 LOCAL_BASELINE_OUTER_DEG = 12.0
 LOCAL_BASELINE_MIN_POINTS = 120
-TOP_N = 20
-OUTPUT_PNG_METHOD_COMPARE = "importance_method_compare.png"
-HEATMAP_DPI = 200
-HEATMAP_CMAP = "coolwarm"
-HEATMAP_VMAX_QUANTILE = 0.995
-HEATMAP_DIVERGING = True
 
-# IG/梯度可视化参数（发散型，以0为中心）
+# 可视化基础参数
+HEATMAP_DPI = 200
+
+# IG 参数
+IG_STEPS = 50
 GRADIENT_CMAP = "RdBu_r"
-GRADIENT_DIVERGING = True
 GRADIENT_CENTER_WINDOW_DEG = 10.0
 GRADIENT_CENTER_SCALE_QUANTILE = 0.99
 GRADIENT_ALPHA_QUANTILE = 0.90
-
-# 重要性计算模式
-# - "perturbation": 基于遮蔽的输出增量（原始行为）
-# - "input_gradient": 积分梯度（IG）输入归因
-# - "erf": 有效感受野（ERF），即 |输出对输入的偏导|
-# - "compare": 同时运行 perturbation + IG + ERF 并绘制并排比较图（仅支持单目标变量）
-# 提示：独立调试 ERF 图时切换为 "erf"。
-IMPORTANCE_MODE = "compare"
-
-# 若设置，则仅从这些变量累积梯度（None = 所有含经纬度的变量）
-GRADIENT_VARIABLES = None
-
-# 梯度可视化缩放参数（vmax 的分位数）
-# 降低分位数使色标范围更紧凑，让小值也能显示出差异
 GRADIENT_VMAX_QUANTILE = 0.90
+GRADIENT_TIME_AGG = "single"  # "single" 或 "mean"，仅在 PERTURB_TIME="all" 时生效
 
 # ERF 参数
-ERF_VARIABLES = None  # None = 所有含经纬度的变量（比较模式下为 TARGET_VARIABLE）
 ERF_ABS = True  # 使用 |输出对输入的偏导| 的幅值
 ERF_CMAP = "Blues"
-ERF_DIVERGING = False
 ERF_CENTER_WINDOW_DEG = 10.0
 ERF_CENTER_SCALE_QUANTILE = 0.99
 ERF_ALPHA_QUANTILE = 0.90

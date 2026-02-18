@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 @dataclass(frozen=True)
 class AnalysisConfig:
+    """当前 IG 候选筛选 + 扰动验证流程所需的最小配置集合。"""
+
     dataset_configs: Dict[str, Dict[str, str]]
     dataset_type: str
     target_time_idx: int
@@ -16,7 +18,6 @@ class AnalysisConfig:
     target_variables: Optional[List[str]]
     target_level: Any
     target_levels: Dict[str, Any]
-    region_radius_deg: float
     patch_radius: int
     perturb_time: Any
     perturb_variables: Optional[List[str]]
@@ -25,34 +26,26 @@ class AnalysisConfig:
     local_baseline_inner_deg: float
     local_baseline_outer_deg: float
     local_baseline_min_points: int
-    top_n: int
     heatmap_dpi: int
-    heatmap_cmap: str
-    heatmap_vmax_quantile: float
-    heatmap_diverging: bool
-    output_png: Optional[str]
-    output_png_cartopy: Optional[str]
-    output_png_combined: Optional[str]
-    output_png_method_compare: Optional[str]
-    importance_mode: str
-    gradient_variables: Optional[List[str]]
     gradient_steps: int
+    top_k_candidates: int
+    top_n_report: int
+    include_target_inputs: bool
     gradient_vmax_quantile: float
     gradient_cmap: str
-    gradient_diverging: bool
     gradient_center_window_deg: float
     gradient_center_scale_quantile: float
     gradient_alpha_quantile: Optional[float]
     gradient_time_agg: str
-    # ERF 可视化/聚合控制参数。
-    erf_variables: Optional[List[str]]
     erf_abs: bool
     erf_vmax_quantile: float
     erf_cmap: str
-    erf_diverging: bool
     erf_center_window_deg: float
     erf_center_scale_quantile: float
     erf_alpha_quantile: Optional[float]
+    output_csv: str
+    output_ig_png: Optional[str]
+    output_erf_png: Optional[str]
     dir_path_params: str
     dir_path_dataset: str
     dir_path_stats: str
@@ -60,6 +53,16 @@ class AnalysisConfig:
     @classmethod
     def from_module(cls, cfg_module) -> "AnalysisConfig":
         target_variables = getattr(cfg_module, "TARGET_VARIABLES", None)
+        output_ig_png = getattr(
+            cfg_module,
+            "OUTPUT_IG_PNG",
+            "validation_results/typhoon_ig_candidate_score.png",
+        )
+        output_erf_png = getattr(
+            cfg_module,
+            "OUTPUT_ERF_PNG",
+            "validation_results/typhoon_erf_explanation.png",
+        )
         return cls(
             dataset_configs=cfg_module.DATASET_CONFIGS,
             dataset_type=cfg_module.DATASET_TYPE,
@@ -68,7 +71,6 @@ class AnalysisConfig:
             target_variables=list(target_variables) if target_variables is not None else None,
             target_level=getattr(cfg_module, "TARGET_LEVEL", None),
             target_levels=getattr(cfg_module, "TARGET_LEVELS", {}),
-            region_radius_deg=float(cfg_module.REGION_RADIUS_DEG),
             patch_radius=int(cfg_module.PATCH_RADIUS),
             perturb_time=cfg_module.PERTURB_TIME,
             perturb_variables=getattr(cfg_module, "PERTURB_VARIABLES", None),
@@ -77,33 +79,30 @@ class AnalysisConfig:
             local_baseline_inner_deg=float(getattr(cfg_module, "LOCAL_BASELINE_INNER_DEG", 5.0)),
             local_baseline_outer_deg=float(getattr(cfg_module, "LOCAL_BASELINE_OUTER_DEG", 12.0)),
             local_baseline_min_points=int(getattr(cfg_module, "LOCAL_BASELINE_MIN_POINTS", 120)),
-            top_n=int(cfg_module.TOP_N),
             heatmap_dpi=int(cfg_module.HEATMAP_DPI),
-            heatmap_cmap=cfg_module.HEATMAP_CMAP,
-            heatmap_vmax_quantile=float(cfg_module.HEATMAP_VMAX_QUANTILE),
-            heatmap_diverging=bool(getattr(cfg_module, "HEATMAP_DIVERGING", False)),
-            output_png=getattr(cfg_module, "OUTPUT_PNG", None),
-            output_png_cartopy=getattr(cfg_module, "OUTPUT_PNG_CARTOPY", None),
-            output_png_combined=getattr(cfg_module, "OUTPUT_PNG_COMBINED", None),
-            output_png_method_compare=getattr(cfg_module, "OUTPUT_PNG_METHOD_COMPARE", None),
-            importance_mode=getattr(cfg_module, "IMPORTANCE_MODE", "perturbation"),
-            gradient_variables=getattr(cfg_module, "GRADIENT_VARIABLES", None),
             gradient_steps=int(getattr(cfg_module, "IG_STEPS", 50)),
-            gradient_vmax_quantile=float(getattr(cfg_module, "GRADIENT_VMAX_QUANTILE", cfg_module.HEATMAP_VMAX_QUANTILE)),
+            top_k_candidates=int(getattr(cfg_module, "TOP_K_CANDIDATES", 200)),
+            top_n_report=int(getattr(cfg_module, "TOP_N_REPORT", 20)),
+            include_target_inputs=bool(getattr(cfg_module, "INCLUDE_TARGET_INPUTS", False)),
+            gradient_vmax_quantile=float(getattr(cfg_module, "GRADIENT_VMAX_QUANTILE", 0.995)),
             gradient_cmap=getattr(cfg_module, "GRADIENT_CMAP", "RdBu_r"),
-            gradient_diverging=bool(getattr(cfg_module, "GRADIENT_DIVERGING", True)),
             gradient_center_window_deg=float(getattr(cfg_module, "GRADIENT_CENTER_WINDOW_DEG", 10.0)),
             gradient_center_scale_quantile=float(getattr(cfg_module, "GRADIENT_CENTER_SCALE_QUANTILE", 0.99)),
             gradient_alpha_quantile=getattr(cfg_module, "GRADIENT_ALPHA_QUANTILE", 0.90),
             gradient_time_agg=getattr(cfg_module, "GRADIENT_TIME_AGG", "single"),
-            erf_variables=getattr(cfg_module, "ERF_VARIABLES", None),
             erf_abs=bool(getattr(cfg_module, "ERF_ABS", True)),
-            erf_vmax_quantile=float(getattr(cfg_module, "ERF_VMAX_QUANTILE", cfg_module.HEATMAP_VMAX_QUANTILE)),
+            erf_vmax_quantile=float(getattr(cfg_module, "ERF_VMAX_QUANTILE", 0.995)),
             erf_cmap=getattr(cfg_module, "ERF_CMAP", "Blues"),
-            erf_diverging=bool(getattr(cfg_module, "ERF_DIVERGING", False)),
             erf_center_window_deg=float(getattr(cfg_module, "ERF_CENTER_WINDOW_DEG", 10.0)),
             erf_center_scale_quantile=float(getattr(cfg_module, "ERF_CENTER_SCALE_QUANTILE", 0.99)),
             erf_alpha_quantile=getattr(cfg_module, "ERF_ALPHA_QUANTILE", 0.90),
+            output_csv=getattr(
+                cfg_module,
+                "OUTPUT_CSV",
+                "validation_results/typhoon_gridpoint_importance_ranking.csv",
+            ),
+            output_ig_png=output_ig_png if output_ig_png else None,
+            output_erf_png=output_erf_png if output_erf_png else None,
             dir_path_params=cfg_module.DIR_PATH_PARAMS,
             dir_path_dataset=cfg_module.DIR_PATH_DATASET,
             dir_path_stats=cfg_module.DIR_PATH_STATS,
@@ -121,12 +120,9 @@ class AnalysisContext:
     center_lat: float
     center_lon: float
     target_vars: List[str]
-    vars_to_perturb: List[str]
     base_values: Dict[str, float]
     lat_vals: Any
     lon_vals: Any
-    lat_indices: Any
-    lon_indices: Any
 
 
 def resolve_target_variables(
@@ -138,17 +134,11 @@ def resolve_target_variables(
     return [target_variable]
 
 
-def resolve_perturbation_variables(
-    importance_mode: str,
-    target_variable: str,
+def resolve_spatial_variables(
     perturb_variables: Optional[List[str]],
     eval_inputs,
 ) -> List[str]:
-    if importance_mode == "compare":
-        if target_variable not in eval_inputs.data_vars:
-            raise ValueError(f"TARGET_VARIABLE '{target_variable}' not found in eval_inputs for compare mode")
-        return [target_variable]
-
+    """解析用于归因/扰动的输入变量集合。"""
     if perturb_variables is None:
         return [
             var_name
@@ -168,9 +158,9 @@ def select_target_data(outputs, var: str, target_levels: Dict[str, Any], target_
 
 
 def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
-    """一次性加载模型/数据，为归因方法准备可复用的上下文。"""
-    import numpy as np
+    """一次性加载模型/数据，为后续归因方法准备上下文。"""
     import jax
+    import numpy as np
 
     from cyclone_points import pick_target_cyclone
     from model_utils import (
@@ -180,7 +170,6 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
         load_dataset,
         load_normalization_stats,
     )
-    from impact_analysis_utils import select_region_indices
 
     if runtime_cfg.dataset_type not in runtime_cfg.dataset_configs:
         raise ValueError(f"Invalid DATASET_TYPE: {runtime_cfg.dataset_type}")
@@ -188,12 +177,8 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
     dataset_config = runtime_cfg.dataset_configs[runtime_cfg.dataset_type]
     print(f"\n=== Config: {dataset_config['name']} ===")
     print(f"target_time_idx: {runtime_cfg.target_time_idx}")
-    print(
-        f"region_radius_deg: {runtime_cfg.region_radius_deg} | "
-        f"patch_radius: {runtime_cfg.patch_radius}"
-    )
+    print(f"patch_radius: {runtime_cfg.patch_radius}")
 
-    # 1) 加载检查点和样本批次。
     ckpt = load_checkpoint(f"{runtime_cfg.dir_path_params}/{dataset_config['params_file']}")
     params = ckpt.params
     state = {}
@@ -202,9 +187,10 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
 
     example_batch = load_dataset(f"{runtime_cfg.dir_path_dataset}/{dataset_config['dataset_file']}")
     eval_inputs, eval_targets, eval_forcings = extract_eval_data(example_batch, task_config)
-    diffs_stddev_by_level, mean_by_level, stddev_by_level = load_normalization_stats(runtime_cfg.dir_path_stats)
+    diffs_stddev_by_level, mean_by_level, stddev_by_level = load_normalization_stats(
+        runtime_cfg.dir_path_stats
+    )
 
-    # 2) 构建所有归因方法共用的 JIT 前向函数。
     print("JIT compiling model...")
     run_forward_jitted = build_run_forward(
         model_config,
@@ -221,7 +207,6 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
     center_lat = float(target_cyclone["lat"])
     center_lon = float(target_cyclone["lon"])
 
-    # 3) 运行一次基线前向传播，缓存中心点的目标值。
     targets_template = eval_targets * np.nan
     base_outputs = run_forward_jitted(
         rng=jax.random.PRNGKey(0),
@@ -232,6 +217,11 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
 
     target_vars = resolve_target_variables(runtime_cfg.target_variable, runtime_cfg.target_variables)
     print(f"target_variables: {', '.join(target_vars)}")
+
+    spatial_vars = resolve_spatial_variables(runtime_cfg.perturb_variables, eval_inputs)
+    if not spatial_vars:
+        raise ValueError("No spatial input variables found")
+    print(f"spatial input vars: {len(spatial_vars)}")
 
     base_values: Dict[str, float] = {}
     for var in target_vars:
@@ -250,31 +240,6 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
 
     lat_vals = eval_inputs.coords["lat"].values
     lon_vals = eval_inputs.coords["lon"].values
-    # 4) 将扫描/归因范围限制在台风中心周围的局部区域内。
-    lat_indices, lon_indices = select_region_indices(
-        lat_vals,
-        lon_vals,
-        center_lat,
-        center_lon,
-        runtime_cfg.region_radius_deg,
-    )
-
-    vars_to_perturb = resolve_perturbation_variables(
-        importance_mode=runtime_cfg.importance_mode,
-        target_variable=runtime_cfg.target_variable,
-        perturb_variables=runtime_cfg.perturb_variables,
-        eval_inputs=eval_inputs,
-    )
-    if not vars_to_perturb:
-        raise ValueError("No perturbation variables found")
-
-    if runtime_cfg.importance_mode == "compare":
-        print(
-            "[COMPARE MODE] Aligning perturbation and gradient to single variable: "
-            f"{runtime_cfg.target_variable}"
-        )
-
-    print(f"Spatial vars: {len(vars_to_perturb)}")
 
     return AnalysisContext(
         dataset_config=dataset_config,
@@ -286,10 +251,7 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
         center_lat=center_lat,
         center_lon=center_lon,
         target_vars=target_vars,
-        vars_to_perturb=vars_to_perturb,
         base_values=base_values,
         lat_vals=lat_vals,
         lon_vals=lon_vals,
-        lat_indices=lat_indices,
-        lon_indices=lon_indices,
     )
