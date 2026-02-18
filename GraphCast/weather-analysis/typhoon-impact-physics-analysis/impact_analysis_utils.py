@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Utilities for occlusion-based typhoon impact scanning."""
+"""基于遮蔽的台风影响扫描工具函数。"""
 
 import numpy as np
 import xarray
@@ -12,7 +12,7 @@ def _annulus_mask(lat_vals: np.ndarray, lon_vals: np.ndarray, center_lat: float,
     lat_rad = np.deg2rad(lat2d)
     center_lat_rad = np.deg2rad(center_lat)
     lon_diff_rad = np.deg2rad(lon_diff)
-    # Great-circle central angle in degrees to avoid latitude-dependent distortion.
+    # 使用大圆弧中心角（度）以避免依赖纬度的形变。
     cos_d = np.sin(lat_rad) * np.sin(center_lat_rad) + np.cos(lat_rad) * np.cos(center_lat_rad) * np.cos(lon_diff_rad)
     cos_d = np.clip(cos_d, -1.0, 1.0)
     dist_deg = np.rad2deg(np.arccos(cos_d))

@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Minimal ROI checks for IG sign + rank consistency.
+"""IG 符号与排名一致性的最小 ROI 验证。
 
-Implements two checks (center ROI only):
-1) Sign sanity: pick argmax(IG) and argmin(IG), verify the perturbation delta
-   at those points matches the expected sign when using -IG as a proxy for Δy.
-2) Rank consistency: Spearman rho between |IG| and |Δy|, plus one shuffle
-   control (shuffle IG within ROI once; rho should drop).
+实现两项检查（仅限中心 ROI）：
+1) 符号合理性：取 argmax(IG) 和 argmin(IG)，验证这些点处的扰动增量
+   在以 -IG 作为 Δy 代理时符号是否正确。
+2) 排名一致性：|IG| 与 |Δy| 之间的 Spearman rho，以及一次随机置换
+   控制（在 ROI 内对 IG 随机置换一次；rho 应下降）。
 
-Notes:
-- Δy here is defined as (perturbed - original), matching the perturbation code.
-- To make signs comparable, IG uses the same baseline mode/value as perturbation.
-- If cfg.PERTURB_TIME == 'all', both IG and perturbation aggregate over all
-  perturbed input times by summing contributions.
+备注：
+- 此处 Δy 定义为（扰动后 - 原始值），与扰动代码一致。
+- 为使符号可比，IG 使用与扰动相同的基线模式/值。
+- 若 cfg.PERTURB_TIME == 'all'，IG 和扰动均通过求和在所有
+  扰动输入时刻上进行聚合。
 """
 
 from __future__ import annotations
@@ -46,16 +46,16 @@ from graphcast import xarray_jax
 
 
 def _spearman(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """Return (rho, p) as plain floats across SciPy versions."""
+    """跨 SciPy 版本以普通浮点数返回 (rho, p)。"""
     res = spearmanr(x, y, nan_policy="omit")
-    # SciPy may return either a SignificanceResult (preferred) or a tuple-like.
+    # SciPy 可能返回 SignificanceResult（优先）或类元组形式。
     rho = float(getattr(res, "statistic", res[0]))  # type: ignore[index]
     pval = float(getattr(res, "pvalue", res[1]))  # type: ignore[index]
     return rho, pval
 
 
 def _match_shape(base_vals: np.ndarray, target_shape) -> np.ndarray:
-    """Broadcast baseline values to match a slice shape."""
+    """将基线值广播以匹配切片形状。"""
     if base_vals.shape == target_shape:
         return base_vals
     if base_vals.ndim < len(target_shape):
@@ -103,7 +103,7 @@ def _target_scalar(
 
 
 def _reduce_ig_to_latlon(ig_attr: np.ndarray, original_da: xarray.DataArray) -> xarray.DataArray:
-    """Reduce raw IG attribution to a 2D (lat, lon) map consistent with perturbation."""
+    """将原始 IG 归因降维为与扰动一致的二维 (lat, lon) 图。"""
     ig_da = xarray.DataArray(
         ig_attr,
         dims=original_da.dims,
@@ -202,7 +202,7 @@ def main() -> int:
     if target_var not in eval_inputs.data_vars:
         raise ValueError(f"TARGET_VARIABLE '{target_var}' not found in eval_inputs")
 
-    # Baseline values for perturbation/IG (same baseline mode).
+    # 扰动/IG 的基线值（使用相同基线模式）。
     baseline_ds = compute_baseline(
         eval_inputs,
         [target_var],
@@ -223,7 +223,7 @@ def main() -> int:
         attrs=original_da.attrs,
     )
 
-    # Build IG baseline inputs.
+    # 构建 IG 基线输入。
     baseline_inputs = eval_inputs.copy(deep=False)
     baseline_inputs[target_var] = baseline_da_full
 
@@ -263,7 +263,7 @@ def main() -> int:
     ig_map_full = _reduce_ig_to_latlon(ig_attr, original_da)
     print(f"IG done in {time.time() - t0:.1f}s")
 
-    # Region selection (outer) then center ROI selection.
+    # 外部区域选择，然后中心 ROI 选择。
     lat_vals = eval_inputs.coords["lat"].values
     lon_vals = eval_inputs.coords["lon"].values
     lat_indices, lon_indices = select_region_indices(lat_vals, lon_vals, center_lat, center_lon, cfg.REGION_RADIUS_DEG)
@@ -280,7 +280,7 @@ def main() -> int:
     roi_lon_vals = lon_sel_vals[lon_mask_center]
     print(f"center ROI shape: {ig_roi.shape} (n={ig_roi.size})")
 
-    # Find argmax/min IG within center ROI.
+    # 在中心 ROI 内查找 IG 的 argmax/argmin。
     flat = ig_roi.ravel()
     argmax_idx = int(np.nanargmax(flat))
     argmin_idx = int(np.nanargmin(flat))
@@ -292,15 +292,15 @@ def main() -> int:
     print(f"  argmax(IG): lat={p_max[0]:.2f}, lon={p_max[1]:.2f}, IG={float(ig_roi[r_max, c_max]):+.6e}")
     print(f"  argmin(IG): lat={p_min[0]:.2f}, lon={p_min[1]:.2f}, IG={float(ig_roi[r_min, c_min]):+.6e}")
 
-    # Compute Δy for all points in center ROI (single variable).
-    # We occlude inputs at (lat, lon) to baseline values, matching perturbation Δy.
+    # 计算中心 ROI 内所有点的 Δy（单变量）。
+    # 将 (lat, lon) 处的输入遮蔽为基线值，与扰动 Δy 保持一致。
     time_sel = slice(None) if cfg.PERTURB_TIME == "all" else int(cfg.PERTURB_TIME)
     level_sel = resolve_level_sel(original_da, cfg.PERTURB_LEVELS)
     base_idx = build_baseline_indexer(original_da, time_sel, level_sel)
     base_arr = baseline_ds[target_var].values
     arr = original_da.values
 
-    # Absolute indices in the full grid for center ROI.
+    # 中心 ROI 在完整网格中的绝对索引。
     lat_indices_roi = lat_indices[lat_mask_center]
     lon_indices_roi = lon_indices[lon_mask_center]
     delta_roi = np.zeros((len(lat_indices_roi), len(lon_indices_roi)), dtype=np.float32)
@@ -344,7 +344,7 @@ def main() -> int:
 
     print(f"Δy done in {time.time() - t1:.1f}s")
 
-    # Check sign sanity.
+    # 验证符号合理性。
     dy_argmax = float(delta_roi[r_max, c_max])
     dy_argmin = float(delta_roi[r_min, c_min])
     print("\n[Sign sanity results] (Δy = perturbed - original)")
@@ -353,7 +353,7 @@ def main() -> int:
     print(f"  pass1 Δy(argmax IG) < 0: {dy_argmax < 0}")
     print(f"  pass2 Δy(argmin IG) > 0: {dy_argmin > 0}")
 
-    # Rank consistency.
+    # 排名一致性。
     ig_flat = np.abs(ig_roi.ravel())
     dy_flat = np.abs(delta_roi.ravel())
     rho, pval = _spearman(ig_flat, dy_flat)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Core orchestration helpers for typhoon impact analysis."""
+"""台风影响分析的核心编排辅助模块。"""
 
 from __future__ import annotations
 
@@ -35,8 +35,6 @@ class AnalysisConfig:
     output_png_combined: Optional[str]
     output_png_method_compare: Optional[str]
     importance_mode: str
-    gradient_mode: str
-    gradient_x_input: bool
     gradient_variables: Optional[List[str]]
     gradient_steps: int
     gradient_vmax_quantile: float
@@ -46,6 +44,15 @@ class AnalysisConfig:
     gradient_center_scale_quantile: float
     gradient_alpha_quantile: Optional[float]
     gradient_time_agg: str
+    # ERF 可视化/聚合控制参数。
+    erf_variables: Optional[List[str]]
+    erf_abs: bool
+    erf_vmax_quantile: float
+    erf_cmap: str
+    erf_diverging: bool
+    erf_center_window_deg: float
+    erf_center_scale_quantile: float
+    erf_alpha_quantile: Optional[float]
     dir_path_params: str
     dir_path_dataset: str
     dir_path_stats: str
@@ -80,8 +87,6 @@ class AnalysisConfig:
             output_png_combined=getattr(cfg_module, "OUTPUT_PNG_COMBINED", None),
             output_png_method_compare=getattr(cfg_module, "OUTPUT_PNG_METHOD_COMPARE", None),
             importance_mode=getattr(cfg_module, "IMPORTANCE_MODE", "perturbation"),
-            gradient_mode=getattr(cfg_module, "GRADIENT_MODE", "signed"),
-            gradient_x_input=bool(getattr(cfg_module, "GRADIENT_X_INPUT", False)),
             gradient_variables=getattr(cfg_module, "GRADIENT_VARIABLES", None),
             gradient_steps=int(getattr(cfg_module, "IG_STEPS", 50)),
             gradient_vmax_quantile=float(getattr(cfg_module, "GRADIENT_VMAX_QUANTILE", cfg_module.HEATMAP_VMAX_QUANTILE)),
@@ -91,6 +96,14 @@ class AnalysisConfig:
             gradient_center_scale_quantile=float(getattr(cfg_module, "GRADIENT_CENTER_SCALE_QUANTILE", 0.99)),
             gradient_alpha_quantile=getattr(cfg_module, "GRADIENT_ALPHA_QUANTILE", 0.90),
             gradient_time_agg=getattr(cfg_module, "GRADIENT_TIME_AGG", "single"),
+            erf_variables=getattr(cfg_module, "ERF_VARIABLES", None),
+            erf_abs=bool(getattr(cfg_module, "ERF_ABS", True)),
+            erf_vmax_quantile=float(getattr(cfg_module, "ERF_VMAX_QUANTILE", cfg_module.HEATMAP_VMAX_QUANTILE)),
+            erf_cmap=getattr(cfg_module, "ERF_CMAP", "Blues"),
+            erf_diverging=bool(getattr(cfg_module, "ERF_DIVERGING", False)),
+            erf_center_window_deg=float(getattr(cfg_module, "ERF_CENTER_WINDOW_DEG", 10.0)),
+            erf_center_scale_quantile=float(getattr(cfg_module, "ERF_CENTER_SCALE_QUANTILE", 0.99)),
+            erf_alpha_quantile=getattr(cfg_module, "ERF_ALPHA_QUANTILE", 0.90),
             dir_path_params=cfg_module.DIR_PATH_PARAMS,
             dir_path_dataset=cfg_module.DIR_PATH_DATASET,
             dir_path_stats=cfg_module.DIR_PATH_STATS,
@@ -155,6 +168,7 @@ def select_target_data(outputs, var: str, target_levels: Dict[str, Any], target_
 
 
 def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
+    """一次性加载模型/数据，为归因方法准备可复用的上下文。"""
     import numpy as np
     import jax
 
@@ -179,6 +193,7 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
         f"patch_radius: {runtime_cfg.patch_radius}"
     )
 
+    # 1) 加载检查点和样本批次。
     ckpt = load_checkpoint(f"{runtime_cfg.dir_path_params}/{dataset_config['params_file']}")
     params = ckpt.params
     state = {}
@@ -189,6 +204,7 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
     eval_inputs, eval_targets, eval_forcings = extract_eval_data(example_batch, task_config)
     diffs_stddev_by_level, mean_by_level, stddev_by_level = load_normalization_stats(runtime_cfg.dir_path_stats)
 
+    # 2) 构建所有归因方法共用的 JIT 前向函数。
     print("JIT compiling model...")
     run_forward_jitted = build_run_forward(
         model_config,
@@ -205,6 +221,7 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
     center_lat = float(target_cyclone["lat"])
     center_lon = float(target_cyclone["lon"])
 
+    # 3) 运行一次基线前向传播，缓存中心点的目标值。
     targets_template = eval_targets * np.nan
     base_outputs = run_forward_jitted(
         rng=jax.random.PRNGKey(0),
@@ -233,6 +250,7 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
 
     lat_vals = eval_inputs.coords["lat"].values
     lon_vals = eval_inputs.coords["lon"].values
+    # 4) 将扫描/归因范围限制在台风中心周围的局部区域内。
     lat_indices, lon_indices = select_region_indices(
         lat_vals,
         lon_vals,

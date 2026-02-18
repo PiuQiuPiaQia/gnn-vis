@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Heatmap visualization for typhoon impact importance."""
+"""台风影响重要性的热图可视化模块。"""
 
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union, cast
@@ -36,7 +36,7 @@ def _extract_center_window(
     center_lon: float,
     window_deg: float,
 ) -> np.ndarray:
-    """Return data in a lat/lon window around (center_lat, center_lon)."""
+    """返回以 (center_lat, center_lon) 为中心的经纬度窗口内的数据。"""
     if window_deg <= 0:
         return data
 
@@ -68,7 +68,7 @@ def _compute_norm(
     center_window: Optional[np.ndarray] = None,
     center_s_quantile: float = 0.99,
 ):
-    """Compute (vmin, vmax, norm). For diverging plots, uses symmetric limits around 0."""
+    """计算 (vmin, vmax, norm)。对于发散型图，使用以 0 为中心的对称范围。"""
     if diverging:
         ref = center_window if center_window is not None else data
         s = _safe_abs_quantile(ref, center_s_quantile) if vmax_quantile is not None else float(np.max(np.abs(ref)))
@@ -207,7 +207,7 @@ def _apply_transparency_mask(
     window_ref: np.ndarray,
     alpha_quantile: Optional[float],
 ) -> np.ndarray:
-    """Mask small |data| values to transparent (via NaN/masked array)."""
+    """将 |data| 较小的值遮蔽为透明（通过 NaN/掩码数组）。"""
     if alpha_quantile is None:
         return data
     thr = _safe_abs_quantile(window_ref, alpha_quantile)
@@ -230,7 +230,7 @@ def plot_importance_heatmap(
     center_window_deg: float = 10.0,
     center_s_quantile: float = 0.99,
     alpha_quantile: Optional[float] = None,
-):
+) -> None:
     lat_vals = importance_da.coords["lat"].values
     lon_vals = importance_da.coords["lon"].values
     data = importance_da.values
@@ -303,7 +303,7 @@ def plot_importance_heatmap_cartopy(
     center_window_deg: float = 10.0,
     center_s_quantile: float = 0.99,
     alpha_quantile: Optional[float] = None,
-):
+) -> None:
     try:
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
@@ -381,7 +381,7 @@ def plot_importance_heatmap_cartopy(
     plt.close(fig)
 
 
-def plot_importance_heatmap_dual(
+def plot_importance_heatmap_panels(
     importance_list: list,
     titles: list,
     center_lat: float,
@@ -395,9 +395,12 @@ def plot_importance_heatmap_dual(
     center_window_deg: Union[float, Sequence[float]] = 10.0,
     center_s_quantile: Union[float, Sequence[float]] = 0.99,
     alpha_quantile: Union[Optional[float], Sequence[Optional[float]]] = None,
-):
-    if len(importance_list) != 2:
-        raise ValueError("plot_importance_heatmap_dual expects exactly 2 maps")
+) -> None:
+    """渲染一个或多个并排重要性面板，每个面板独立样式。"""
+    if not importance_list:
+        raise ValueError("plot_importance_heatmap_panels expects at least one map")
+    if len(titles) != len(importance_list):
+        raise ValueError("titles length must match number of maps")
 
     n_panel = len(importance_list)
     vmax_quantile_list = _expand_param(vmax_quantile, n_panel, "vmax_quantile")
@@ -408,7 +411,10 @@ def plot_importance_heatmap_dual(
     center_s_quantile_list = _expand_param(center_s_quantile, n_panel, "center_s_quantile")
     alpha_quantile_list = _expand_param(alpha_quantile, n_panel, "alpha_quantile")
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6), dpi=dpi)
+    fig, axes = plt.subplots(1, n_panel, figsize=(7 * n_panel, 6), dpi=dpi)
+    if n_panel == 1:
+        axes = [axes]
+
     for i, (ax, importance_da, title) in enumerate(zip(axes, importance_list, titles)):
         lat_vals = importance_da.coords["lat"].values
         lon_vals = importance_da.coords["lon"].values
@@ -425,6 +431,7 @@ def plot_importance_heatmap_dual(
         panel_alpha = None if panel_alpha_item is None else float(panel_alpha_item)
         panel_cmap = str(cast(Any, cmap_list[i]))
 
+        # 逐面板归一化确保混合方法（如 perturb/IG/ERF）的可读性。
         window = _extract_center_window(data, lat_vals, lon_vals, center_lat, center_lon, panel_window_deg)
         data = _apply_transparency_mask(data, window_ref=window, alpha_quantile=panel_alpha)
         vmin, vmax, norm = _compute_norm(
@@ -472,3 +479,38 @@ def plot_importance_heatmap_dual(
     fig.tight_layout()
     fig.savefig(output_path)
     plt.close(fig)
+
+
+def plot_importance_heatmap_dual(
+    importance_list: list,
+    titles: list,
+    center_lat: float,
+    center_lon: float,
+    output_path: Path,
+    cmap: Union[str, Sequence[str]] = "coolwarm",
+    dpi: int = 200,
+    vmax_quantile: Union[Optional[float], Sequence[Optional[float]]] = 0.995,
+    diverging: Union[bool, Sequence[bool]] = False,
+    cbar_label: Union[Optional[str], Sequence[Optional[str]]] = None,
+    center_window_deg: Union[float, Sequence[float]] = 10.0,
+    center_s_quantile: Union[float, Sequence[float]] = 0.99,
+    alpha_quantile: Union[Optional[float], Sequence[Optional[float]]] = None,
+) -> None:
+    if len(importance_list) != 2:
+        raise ValueError("plot_importance_heatmap_dual expects exactly 2 maps")
+
+    plot_importance_heatmap_panels(
+        importance_list=importance_list,
+        titles=titles,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        output_path=output_path,
+        cmap=cmap,
+        dpi=dpi,
+        vmax_quantile=vmax_quantile,
+        diverging=diverging,
+        cbar_label=cbar_label,
+        center_window_deg=center_window_deg,
+        center_s_quantile=center_s_quantile,
+        alpha_quantile=alpha_quantile,
+    )

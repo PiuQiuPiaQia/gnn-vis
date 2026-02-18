@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GraphCast model and data utilities for typhoon impact analysis."""
+"""台风影响分析的 GraphCast 模型与数据工具函数。"""
 
 import sys
 from pathlib import Path
@@ -10,7 +10,7 @@ import xarray
 import jax
 import haiku as hk
 
-# Add project paths before importing graphcast
+# 在导入 graphcast 之前添加项目路径
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_DIR = SCRIPT_DIR.parent.parent
 sys.path.insert(0, str(PROJECT_DIR))

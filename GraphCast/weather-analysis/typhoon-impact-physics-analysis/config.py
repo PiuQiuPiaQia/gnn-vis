@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Configuration for typhoon impact physics analysis."""
+"""台风影响物理分析的配置文件。"""
 
 DATASET_CONFIGS = {
     "low_res": {
@@ -14,17 +14,17 @@ DATASET_CONFIGS = {
     },
 }
 
-# Experiment config
+# 实验配置
 DATASET_TYPE = "low_res"  # "low_res" | "high_res"
 TARGET_TIME_IDX = 0  # 0(+6h),1(+12h),2(+18h),3(+24h)
-TARGET_VARIABLE = "mean_sea_level_pressure"  # default target for single-variable runs
-TARGET_VARIABLES = None  # set None to use TARGET_VARIABLE; for compare mode this must resolve to exactly one variable
+TARGET_VARIABLE = "mean_sea_level_pressure"  # 单变量运行的默认目标变量
+TARGET_VARIABLES = None  # 设为 None 则使用 TARGET_VARIABLE；比较模式下必须解析为恰好一个变量
 REGION_RADIUS_DEG = 15
-PATCH_RADIUS = 0  # 0=single grid, 1=3x3 patch
-PERTURB_TIME = "all"  # "all" or 0/1
-PERTURB_VARIABLES = None  # None = all vars with lat/lon
-PERTURB_LEVELS = None  # None = all levels
-BASELINE_MODE = "local_annulus_median"  # "spatial_mean" | "spatial_median" | "local_annulus_mean" | "local_annulus_median"
+PATCH_RADIUS = 0  # 0=单格, 1=3x3 区域
+PERTURB_TIME = "all"  # "all" 或 0/1
+PERTURB_VARIABLES = None  # None = 所有含经纬度的变量
+PERTURB_LEVELS = None  # None = 所有气压层
+BASELINE_MODE = "local_annulus_median"  # 可选: "spatial_mean" | "spatial_median" | "local_annulus_mean" | "local_annulus_median"
 LOCAL_BASELINE_INNER_DEG = 5.0
 LOCAL_BASELINE_OUTER_DEG = 12.0
 LOCAL_BASELINE_MIN_POINTS = 120
@@ -35,35 +35,39 @@ HEATMAP_CMAP = "coolwarm"
 HEATMAP_VMAX_QUANTILE = 0.995
 HEATMAP_DIVERGING = True
 
-# IG/gradient visualization (diverging, 0-centered)
+# IG/梯度可视化参数（发散型，以0为中心）
 GRADIENT_CMAP = "RdBu_r"
 GRADIENT_DIVERGING = True
 GRADIENT_CENTER_WINDOW_DEG = 10.0
 GRADIENT_CENTER_SCALE_QUANTILE = 0.99
 GRADIENT_ALPHA_QUANTILE = 0.90
 
-# Importance computation mode
-# - "perturbation": occlusion-based delta output (original behavior)
-# - "input_gradient": input saliency |d output / d input|
-# - "compare": run both methods and draw a side-by-side comparison figure (single target variable only)
+# 重要性计算模式
+# - "perturbation": 基于遮蔽的输出增量（原始行为）
+# - "input_gradient": 积分梯度（IG）输入归因
+# - "erf": 有效感受野（ERF），即 |d output / d input|
+# - "compare": 同时运行 perturbation + IG + ERF 并绘制并排比较图（仅支持单目标变量）
+# 提示：独立调试 ERF 图时切换为 "erf"。
 IMPORTANCE_MODE = "compare"
 
-# Input-gradient options
-# - "abs": magnitude-only, non-negative
-# - "signed": signed gradient (use diverging colormap)
-GRADIENT_MODE = "abs"
-
-# When True, uses gradient * input instead of raw gradients
-GRADIENT_X_INPUT = False
-
-# If set, only accumulate gradients from these variables (None = all vars with lat/lon)
+# 若设置，则仅从这些变量累积梯度（None = 所有含经纬度的变量）
 GRADIENT_VARIABLES = None
 
-# Gradient scaling for visualization (quantile for vmax)
+# 梯度可视化缩放参数（vmax 的分位数）
 # 降低分位数使色标范围更紧凑，让小值也能显示出差异
 GRADIENT_VMAX_QUANTILE = 0.90
 
-# Paths
+# ERF 参数
+ERF_VARIABLES = None  # None = 所有含经纬度的变量（比较模式下为 TARGET_VARIABLE）
+ERF_ABS = True  # 使用 |d output / d input| 幅值
+ERF_CMAP = "Blues"
+ERF_DIVERGING = False
+ERF_CENTER_WINDOW_DEG = 10.0
+ERF_CENTER_SCALE_QUANTILE = 0.99
+ERF_ALPHA_QUANTILE = 0.90
+ERF_VMAX_QUANTILE = 0.995
+
+# 路径
 DIR_PATH_PARAMS = "/root/data/params"
 DIR_PATH_DATASET = "/root/data/dataset"
 DIR_PATH_STATS = "/root/data/stats"
