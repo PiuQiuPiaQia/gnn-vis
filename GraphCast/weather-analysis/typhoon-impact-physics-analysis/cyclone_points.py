@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Cyclone point data (copied from point folder)."""
+"""台风中心点数据（从 point 文件夹复制而来）。"""
 
 CYCLONE_CENTERS = [
     {"time": "2022-01-01 00Z", "lat": -21.3138, "lon": 156.6947, "pressure": 997.0, "wind_speed": 40, "category": "TS", "data_type": "input(-6h)", "is_input": True, "input_time_idx": 0},

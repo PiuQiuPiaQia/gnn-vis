@@ -45,7 +45,7 @@ GRADIENT_ALPHA_QUANTILE = 0.90
 # 重要性计算模式
 # - "perturbation": 基于遮蔽的输出增量（原始行为）
 # - "input_gradient": 积分梯度（IG）输入归因
-# - "erf": 有效感受野（ERF），即 |d output / d input|
+# - "erf": 有效感受野（ERF），即 |输出对输入的偏导|
 # - "compare": 同时运行 perturbation + IG + ERF 并绘制并排比较图（仅支持单目标变量）
 # 提示：独立调试 ERF 图时切换为 "erf"。
 IMPORTANCE_MODE = "compare"
@@ -59,7 +59,7 @@ GRADIENT_VMAX_QUANTILE = 0.90
 
 # ERF 参数
 ERF_VARIABLES = None  # None = 所有含经纬度的变量（比较模式下为 TARGET_VARIABLE）
-ERF_ABS = True  # 使用 |d output / d input| 幅值
+ERF_ABS = True  # 使用 |输出对输入的偏导| 的幅值
 ERF_CMAP = "Blues"
 ERF_DIVERGING = False
 ERF_CENTER_WINDOW_DEG = 10.0
