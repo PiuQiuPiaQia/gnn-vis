@@ -20,7 +20,6 @@ from analysis_reporting import (
 
 ROOT_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 
-
 def run_typhoon_impact_analysis() -> Dict[str, Any]:
     """端到端地运行重要性分析并返回可复用的结果数据。"""
     # 局部导入：确保模块在无重依赖的环境中仍可导入。
@@ -96,5 +95,22 @@ def main() -> int:
     return 0
 
 
+def run_typhoon_impact_analysis_in_cell() -> Dict[str, Any]:
+    """用于交互式 cell 的入口。"""
+    results = run_typhoon_impact_analysis()
+    print("done")
+    return results
+
+
+# %% 命令行入口
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# %% Notebook 一键启动（单独运行本 cell）
+if __name__ == "__main__":
+    from run_typhoon_impact_analysis import (
+        run_typhoon_impact_analysis_in_cell as _run_typhoon_impact_analysis_in_cell,
+    )
+
+    CELL_RESULTS = _run_typhoon_impact_analysis_in_cell()
