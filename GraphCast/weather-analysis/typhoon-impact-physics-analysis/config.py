@@ -25,7 +25,8 @@ TARGET_LEVEL = None
 TARGET_LEVELS = {}
 
 # 扰动设置（用于 Top-K 候选点的干预验证）
-PATCH_RADIUS = 0  # 0=单格, 1=3x3 区域
+PATCH_RADIUS = 2
+PATCH_SCORE_AGG = "mean"
 PERTURB_TIME = "all"  # "all" 或 0/1
 PERTURB_VARIABLES = None  # None = 所有含经纬度的变量
 PERTURB_LEVELS = None  # None = 所有气压层

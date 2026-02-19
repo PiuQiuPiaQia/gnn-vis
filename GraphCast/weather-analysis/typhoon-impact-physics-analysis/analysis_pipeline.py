@@ -19,6 +19,7 @@ class AnalysisConfig:
     target_level: Any
     target_levels: Dict[str, Any]
     patch_radius: int
+    patch_score_agg: str
     perturb_time: Any
     perturb_variables: Optional[List[str]]
     perturb_levels: Any
@@ -72,6 +73,7 @@ class AnalysisConfig:
             target_level=getattr(cfg_module, "TARGET_LEVEL", None),
             target_levels=getattr(cfg_module, "TARGET_LEVELS", {}),
             patch_radius=int(cfg_module.PATCH_RADIUS),
+            patch_score_agg=str(getattr(cfg_module, "PATCH_SCORE_AGG", "mean")),
             perturb_time=cfg_module.PERTURB_TIME,
             perturb_variables=getattr(cfg_module, "PERTURB_VARIABLES", None),
             perturb_levels=getattr(cfg_module, "PERTURB_LEVELS", None),
