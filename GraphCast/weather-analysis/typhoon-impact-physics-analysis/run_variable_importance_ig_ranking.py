@@ -19,6 +19,7 @@ from heatmap_utils import plot_importance_heatmap
 from impact_analysis_utils import build_indexer, resolve_level_sel
 from importance_common import reduce_input_attribution_to_latlon, target_scalar
 from model_utils import load_normalization_stats
+from patch_scoring_utils import window_reduce_2d
 
 
 ROOT_DIR = Path(__file__).parent if "__file__" in globals() else Path.cwd()
@@ -32,9 +33,40 @@ class CandidatePoint:
     lon_idx: int
     lat: float
     lon: float
-    ig_score: float
+    candidate_score: float
+    point_ig_score: float
     ig_rank: int
     dominant_var: str
+
+
+def _build_patch_candidate_maps(
+    ig_maps_by_var: Dict[str, np.ndarray],
+    patch_radius: int,
+    patch_score_agg: str,
+    lat_vals: np.ndarray,
+    lon_vals: np.ndarray,
+) -> Dict[str, Any]:
+    patch_maps_by_var: Dict[str, np.ndarray] = {}
+    score_map = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
+    for var_name, var_map in ig_maps_by_var.items():
+        patch_map = window_reduce_2d(
+            np.abs(np.asarray(var_map, dtype=np.float64)),
+            patch_radius,
+            patch_score_agg,
+        )
+        patch_maps_by_var[var_name] = patch_map
+        score_map += patch_map
+
+    score_da = xarray.DataArray(
+        score_map,
+        dims=("lat", "lon"),
+        coords={"lat": lat_vals, "lon": lon_vals},
+        name="patch_ig_candidate_score",
+    )
+    return {
+        "score_da": score_da,
+        "maps_by_var": patch_maps_by_var,
+    }
 
 
 def _resolve_spatial_variables(
@@ -227,13 +259,15 @@ def _compute_ig_candidate_score_map(
 
 
 def _select_top_k_candidates(
-    ig_score_da: xarray.DataArray,
-    ig_maps_by_var: Dict[str, np.ndarray],
+    candidate_score_da: xarray.DataArray,
+    patch_maps_by_var: Dict[str, np.ndarray],
     top_k: int,
+    point_ig_score_da: xarray.DataArray,
 ) -> List[CandidatePoint]:
-    score = np.asarray(ig_score_da.values)
-    lat_vals = np.asarray(ig_score_da.coords["lat"].values)
-    lon_vals = np.asarray(ig_score_da.coords["lon"].values)
+    score = np.asarray(candidate_score_da.values)
+    point_ig_score = np.asarray(point_ig_score_da.values)
+    lat_vals = np.asarray(candidate_score_da.coords["lat"].values)
+    lon_vals = np.asarray(candidate_score_da.coords["lon"].values)
     n_lat, n_lon = score.shape
 
     safe_score = np.where(np.isfinite(score), score, -np.inf)
@@ -245,8 +279,8 @@ def _select_top_k_candidates(
         lat_idx = int(idx // n_lon)
         lon_idx = int(idx % n_lon)
         dominant_var = max(
-            ig_maps_by_var,
-            key=lambda name: abs(float(ig_maps_by_var[name][lat_idx, lon_idx])),
+            patch_maps_by_var,
+            key=lambda name: float(patch_maps_by_var[name][lat_idx, lon_idx]),
         )
         candidates.append(
             CandidatePoint(
@@ -254,7 +288,8 @@ def _select_top_k_candidates(
                 lon_idx=lon_idx,
                 lat=float(lat_vals[lat_idx]),
                 lon=float(lon_vals[lon_idx]),
-                ig_score=float(score[lat_idx, lon_idx]),
+                candidate_score=float(score[lat_idx, lon_idx]),
+                point_ig_score=float(point_ig_score[lat_idx, lon_idx]),
                 ig_rank=rank,
                 dominant_var=dominant_var,
             )
@@ -268,16 +303,17 @@ def _evaluate_candidates_with_perturbation(
     vars_to_use: List[str],
     baseline_inputs: xarray.Dataset,
     candidates: List[CandidatePoint],
+    patch_radius: int,
 ) -> List[Dict[str, Any]]:
     time_sel = slice(None) if runtime_cfg.perturb_time == "all" else int(runtime_cfg.perturb_time)
 
     print(f"\n[Perturb] Evaluating {len(candidates)} IG candidates...")
     rows: List[Dict[str, Any]] = []
     for idx, candidate in enumerate(candidates, start=1):
-        lat_start = max(candidate.lat_idx - runtime_cfg.patch_radius, 0)
-        lat_end = min(candidate.lat_idx + runtime_cfg.patch_radius + 1, len(context.lat_vals))
-        lon_start = max(candidate.lon_idx - runtime_cfg.patch_radius, 0)
-        lon_end = min(candidate.lon_idx + runtime_cfg.patch_radius + 1, len(context.lon_vals))
+        lat_start = max(candidate.lat_idx - patch_radius, 0)
+        lat_end = min(candidate.lat_idx + patch_radius + 1, len(context.lat_vals))
+        lon_start = max(candidate.lon_idx - patch_radius, 0)
+        lon_end = min(candidate.lon_idx + patch_radius + 1, len(context.lon_vals))
         lat_slice = slice(lat_start, lat_end)
         lon_slice = slice(lon_start, lon_end)
 
@@ -320,7 +356,9 @@ def _evaluate_candidates_with_perturbation(
                     "lon": candidate.lon,
                     "lat_idx": candidate.lat_idx,
                     "lon_idx": candidate.lon_idx,
-                    "ig_score": candidate.ig_score,
+                    "patch_radius": patch_radius,
+                    "candidate_score": candidate.candidate_score,
+                    "point_ig_score": candidate.point_ig_score,
                     "ig_rank": candidate.ig_rank,
                     "dominant_var": candidate.dominant_var,
                     "delta_abs_mean": float(np.mean(np.abs(delta_values))),
@@ -388,8 +426,11 @@ def _save_ranking_csv(
                 "lon",
                 "lat_idx",
                 "lon_idx",
+                "patch_radius",
                 "delta_abs_mean",
                 "delta_signed_mean",
+                "candidate_score",
+                "point_ig_score",
                 "ig_score",
                 "ig_rank",
                 "dominant_var",
@@ -404,9 +445,12 @@ def _save_ranking_csv(
                     item["lon"],
                     item["lat_idx"],
                     item["lon_idx"],
+                    item["patch_radius"],
                     item["delta_abs_mean"],
                     item["delta_signed_mean"],
-                    item["ig_score"],
+                    item["candidate_score"],
+                    item["point_ig_score"],
+                    item["candidate_score"],
                     item["ig_rank"],
                     item["dominant_var"],
                     *[item["delta_by_target"].get(target_var, np.nan) for target_var in target_vars],
@@ -421,6 +465,8 @@ def _save_heatmaps(
     center_lon: float,
     ig_score_da: xarray.DataArray,
     erf_score_da: xarray.DataArray,
+    patch_radius: int,
+    patch_score_agg: str,
     output_ig_png: Optional[str],
     output_erf_png: Optional[str],
 ) -> None:
@@ -431,12 +477,12 @@ def _save_heatmaps(
             center_lat=center_lat,
             center_lon=center_lon,
             output_path=ig_path,
-            title="IG candidate score map",
+            title=f"Patch IG candidate score map (r={patch_radius}, agg={patch_score_agg})",
             cmap=runtime_cfg.gradient_cmap,
             dpi=runtime_cfg.heatmap_dpi,
             vmax_quantile=runtime_cfg.gradient_vmax_quantile,
             diverging=False,
-            cbar_label="sum_v |IG_v(lat,lon)|",
+            cbar_label=f"sum_v patch_{patch_score_agg}(|IG_v|, r={patch_radius})",
             center_window_deg=runtime_cfg.gradient_center_window_deg,
             center_s_quantile=runtime_cfg.gradient_center_scale_quantile,
             alpha_quantile=runtime_cfg.gradient_alpha_quantile,
@@ -471,6 +517,8 @@ def run_gridpoint_importance_ranking(
     top_k = max(1, int(runtime_cfg.top_k_candidates))
     top_n = max(1, int(runtime_cfg.top_n_report))
     include_target_inputs = bool(runtime_cfg.include_target_inputs)
+    patch_score_agg = str(runtime_cfg.patch_score_agg).lower().strip()
+    patch_radius = int(runtime_cfg.patch_radius)
     output_csv = runtime_cfg.output_csv
     output_ig_png = runtime_cfg.output_ig_png
     output_erf_png = runtime_cfg.output_erf_png
@@ -499,7 +547,8 @@ def run_gridpoint_importance_ranking(
     print(f"target variables: {', '.join(context.target_vars)}")
     print(f"input variables used: {len(vars_to_use)}")
     print(f"top_k candidates from IG: {top_k}")
-    print(f"patch_radius for perturbation: {runtime_cfg.patch_radius}")
+    print(f"patch_radius: {patch_radius}")
+    print(f"patch score aggregation: {patch_score_agg}")
 
     ig_result = _compute_ig_candidate_score_map(
         context=context,
@@ -508,20 +557,33 @@ def run_gridpoint_importance_ranking(
         baseline_inputs=baseline_inputs,
         ig_steps=actual_ig_steps,
     )
-    ig_score_da = ig_result["score_da"]
-    candidates = _select_top_k_candidates(
-        ig_score_da=ig_score_da,
-        ig_maps_by_var=ig_result["maps_by_var"],
-        top_k=top_k,
-    )
+    point_ig_score_da = ig_result["score_da"]
+    lat_vals = np.asarray(point_ig_score_da.coords["lat"].values)
+    lon_vals = np.asarray(point_ig_score_da.coords["lon"].values)
 
+    patch_result = _build_patch_candidate_maps(
+        ig_maps_by_var=ig_result["maps_by_var"],
+        patch_radius=patch_radius,
+        patch_score_agg=patch_score_agg,
+        lat_vals=lat_vals,
+        lon_vals=lon_vals,
+    )
+    candidates = _select_top_k_candidates(
+        candidate_score_da=patch_result["score_da"],
+        patch_maps_by_var=patch_result["maps_by_var"],
+        top_k=top_k,
+        point_ig_score_da=point_ig_score_da,
+    )
     ranked_rows = _evaluate_candidates_with_perturbation(
         context=context,
         runtime_cfg=runtime_cfg,
         vars_to_use=vars_to_use,
         baseline_inputs=baseline_inputs,
         candidates=candidates,
+        patch_radius=patch_radius,
     )
+
+    ig_score_da = patch_result["score_da"]
 
     print(f"\nTop-{min(top_n, len(ranked_rows))} grid points by |Δ|:")
     for rank, item in enumerate(ranked_rows[:top_n], start=1):
@@ -552,6 +614,8 @@ def run_gridpoint_importance_ranking(
         center_lon=context.center_lon,
         ig_score_da=ig_score_da,
         erf_score_da=erf_score_da,
+        patch_radius=patch_radius,
+        patch_score_agg=patch_score_agg,
         output_ig_png=output_ig_png,
         output_erf_png=output_erf_png,
     )
@@ -562,6 +626,8 @@ def run_gridpoint_importance_ranking(
         "top_k": top_k,
         "top_n": top_n,
         "ig_steps": actual_ig_steps,
+        "patch_radius": patch_radius,
+        "patch_score_agg": patch_score_agg,
         "candidates": candidates,
         "ranked_rows": ranked_rows,
         "ig_completeness": {
