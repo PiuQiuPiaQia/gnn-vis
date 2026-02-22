@@ -168,3 +168,10 @@ cython_debug/
 .DS_Store
 
 opencode.json
+
+# CCB session files
+.ccb/.claude-session
+.ccb/.codex-session
+.ccb/.opencode-session
+.ccb/.gemini-session
+.ccb/.droid-session
