@@ -5,10 +5,9 @@
 from __future__ import annotations
 
 import argparse
-import json
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from run_variable_importance_ig_ranking import run_gridpoint_importance_ranking
+from model.ranking import run_gridpoint_importance_ranking
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -17,29 +16,18 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    ranking_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "ranking",
-        help="Run IG + patch perturbation ranking pipeline",
-    )
-    ranking_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Print compact JSON summary after the run",
+        help="Run IG + patch importance ranking",
     )
 
-    parser.set_defaults(command="ranking", json=False)
+    subparsers.add_parser(
+        "compare",
+        help="Run model receptive-field / physics comparison",
+    )
+
+    parser.set_defaults(command="ranking")
     return parser
-
-
-def _emit_summary(result: Dict[str, Any]) -> None:
-    summary = {
-        "target_vars": result.get("target_vars"),
-        "top_k": result.get("top_k"),
-        "top_n": result.get("top_n"),
-        "patch_radius": result.get("patch_radius"),
-        "output_csv": result.get("output_csv"),
-    }
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -47,9 +35,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "ranking":
-        result = run_gridpoint_importance_ranking()
-        if args.json:
-            _emit_summary(result)
+        run_gridpoint_importance_ranking()
+        return 0
+
+    if args.command == "compare":
+        from physics.comparison import run_physics_comparison
+        run_physics_comparison()
         return 0
 
     parser.error(f"unsupported command: {args.command}")

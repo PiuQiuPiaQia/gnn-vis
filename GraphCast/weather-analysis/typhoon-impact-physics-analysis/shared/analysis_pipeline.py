@@ -165,7 +165,7 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
     import numpy as np
 
     from cyclone_points import pick_target_cyclone
-    from model_utils import (
+    from shared.model_utils import (
         build_run_forward,
         extract_eval_data,
         load_checkpoint,

@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Patch 级候选打分的通用数值工具。"""
-
 from __future__ import annotations
 
 import numpy as np
@@ -32,7 +30,7 @@ def _window_sum_2d(data: np.ndarray, radius: int) -> np.ndarray:
 
 
 def window_reduce_2d(data: np.ndarray, radius: int, agg: str) -> np.ndarray:
-    """对 2D 网格按 Chebyshev 邻域做窗口聚合（sum/mean）。"""
+    """2D 网格按 Chebyshev 邻域做窗口聚合（sum/mean）。"""
     reducer = str(agg).lower().strip()
     if reducer not in {"mean", "sum"}:
         raise ValueError(f"unsupported PATCH_SCORE_AGG: {agg}")

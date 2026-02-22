@@ -1,6 +1,3 @@
-# -*- coding: utf-8 -*-
-"""台风影响分析的 GraphCast 模型与数据工具函数。"""
-
 import sys
 from pathlib import Path
 import dataclasses
@@ -10,9 +7,8 @@ import xarray
 import jax
 import haiku as hk
 
-# 在导入 graphcast 之前添加项目路径
 SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_DIR = SCRIPT_DIR.parent.parent
+PROJECT_DIR = SCRIPT_DIR.parent.parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 PREPROCESS_DIR = PROJECT_DIR / "graphcast-preprocess"
 sys.path.insert(0, str(PREPROCESS_DIR))
