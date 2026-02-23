@@ -210,3 +210,41 @@ def make_target_J_fn(
         return jnp.sum(weights * h_t)
 
     return J
+
+
+# ─── 地转风映射 ────────────────────────────────────────────────────────────────
+
+
+def geostrophic_wind_from_height(
+    height: jax.Array,
+    cfg: SWEPhysicsConfig,
+    f0_floor: float = 1e-5,
+) -> Tuple[jax.Array, jax.Array]:
+    """从高度扰动场计算地转风扰动。
+
+    地转平衡关系（线性化）：
+        delta_u = -(g / f0) * ∂(height) / ∂y
+        delta_v =  (g / f0) * ∂(height) / ∂x
+
+    Args:
+        height: 高度扰动场 (m)，shape (n_lat, n_lon)。
+        cfg: SWE 物理配置，包含 g, f0, dx, dy 等参数。
+        f0_floor: f0 最小绝对值阈值，防止除零。
+
+    Returns:
+        (delta_u, delta_v): 地转风扰动分量 (m/s)，shape 均为 (n_lat, n_lon)。
+
+    Raises:
+        ValueError: 如果 |cfg.f0| < f0_floor。
+    """
+    if abs(cfg.f0) < f0_floor:
+        raise ValueError(f"f0 too small: |f0|={abs(cfg.f0):.2e} < {f0_floor:.2e}")
+
+    # 地转风系数
+    coeff = cfg.g / cfg.f0
+
+    # 地转平衡：u_g = -(g/f0) * ∂h/∂y, v_g = (g/f0) * ∂h/∂x
+    delta_u = -coeff * _centered_diff_y(height, cfg.dy)
+    delta_v = coeff * _centered_diff_x(height, cfg.dx)
+
+    return delta_u, delta_v
