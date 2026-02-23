@@ -88,6 +88,80 @@ def _n_steps_for(target_time_idx: int, dt: float = 300.0) -> int:
     return int(round(lead_hours * 3600.0 / dt))
 
 
+def compute_dlm_background_wind(
+    eval_inputs: xarray.Dataset,
+    center_lat: float,
+    center_lon: float,
+    inner_radius_km: float = 300.0,
+    outer_radius_km: float = 800.0,
+    p_bot_hpa: float = 850.0,
+    p_top_hpa: float = 300.0,
+    time_idx: int = 1,
+) -> tuple:
+    """深层平均引导风 (DLM Steering) — 环形平均 + 质量加权垂直积分。
+
+    Args:
+        eval_inputs:      ERA5 xarray Dataset，含 u/v_component_of_wind。
+        center_lat/lon:   台风中心坐标（度）。
+        inner_radius_km:  环形内半径 (km)。
+        outer_radius_km:  环形外半径 (km)。
+        p_bot_hpa:        垂直积分下界压力层 (hPa)。
+        p_top_hpa:        垂直积分上界压力层 (hPa)。
+        time_idx:         时间步索引（0 = 分析时刻，1 = +6h）。
+
+    Returns:
+        (U_bar, V_bar) in m/s — Python floats.
+    """
+    DEG_TO_M = 111320.0
+
+    lat_all = eval_inputs.coords["lat"].values.astype(float)
+    lon_all = eval_inputs.coords["lon"].values.astype(float)
+
+    # 计算每个格点到台风中心的距离 (km)
+    dlat_m = (lat_all - center_lat) * DEG_TO_M
+    dlon_deg = ((lon_all - center_lon + 180.0) % 360.0) - 180.0
+    cos_lat = np.cos(np.deg2rad(center_lat))
+    dlon_m = dlon_deg * DEG_TO_M * cos_lat
+
+    lat2d, lon2d = np.meshgrid(dlat_m, dlon_m, indexing="ij")
+    dist_km = np.sqrt(lat2d ** 2 + lon2d ** 2) / 1000.0
+    annulus_mask = (dist_km >= inner_radius_km) & (dist_km <= outer_radius_km)
+
+    if not np.any(annulus_mask):
+        return 0.0, 0.0
+
+    def _extract_var(var_name: str) -> xarray.DataArray:
+        da = eval_inputs[var_name]
+        if "batch" in da.dims:
+            da = da.isel(batch=0)
+        if "time" in da.dims:
+            da = da.isel(time=time_idx)
+        return da  # shape (level, lat, lon)
+
+    u_da = _extract_var(_ERA5_U_VAR)
+    v_da = _extract_var(_ERA5_V_VAR)
+    levels = u_da.coords["level"].values.astype(float)
+
+    # 选择 p_top ≤ level ≤ p_bot 的层
+    lev_mask = (levels >= p_top_hpa) & (levels <= p_bot_hpa)
+    if not np.any(lev_mask):
+        return 0.0, 0.0
+    selected_levels = levels[lev_mask]
+
+    u_arr = np.asarray(u_da.values)[lev_mask]  # (n_lev, n_lat, n_lon)
+    v_arr = np.asarray(v_da.values)[lev_mask]
+
+    # 环形空间平均 → (n_lev,)
+    u_prof = np.array([u_arr[k][annulus_mask].mean() for k in range(u_arr.shape[0])])
+    v_prof = np.array([v_arr[k][annulus_mask].mean() for k in range(v_arr.shape[0])])
+
+    # 质量加权垂直积分（梯形法）
+    dp = np.abs(np.diff(selected_levels))
+    u_bar = float(np.sum((u_prof[:-1] + u_prof[1:]) / 2.0 * dp) / dp.sum())
+    v_bar = float(np.sum((v_prof[:-1] + v_prof[1:]) / 2.0 * dp) / dp.sum())
+    return u_bar, v_bar
+
+
 def compute_sensitivity_jax(
     h0: np.ndarray,
     u0: np.ndarray,

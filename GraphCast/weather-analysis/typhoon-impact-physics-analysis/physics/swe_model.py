@@ -36,6 +36,8 @@ class SWEPhysicsConfig:
     dt: float   # 时间步长 (s)
     n_lat: int  # 子域纬度格点数
     n_lon: int  # 子域经度格点数
+    U_bar: float = 0.0  # 背景纬向引导风 (m/s)；=0 退化为原始行为
+    V_bar: float = 0.0  # 背景经向引导风 (m/s)；=0 退化为原始行为
 
 
 def make_physics_config(
@@ -44,6 +46,8 @@ def make_physics_config(
     h0_mean: float,
     g: float = 9.81,
     dt: float = 300.0,
+    U_bar: float = 0.0,
+    V_bar: float = 0.0,
 ) -> SWEPhysicsConfig:
     """根据子域坐标和初始高度场均值构造 SWEPhysicsConfig。
 
@@ -53,6 +57,8 @@ def make_physics_config(
         h0_mean:  初始 h 场均值 (m)，用于估计 H = z_500 / g
         g:        重力加速度
         dt:       时间步长 (s)
+        U_bar:    背景纬向引导风 (m/s)，默认 0
+        V_bar:    背景经向引导风 (m/s)，默认 0
 
     Returns:
         SWEPhysicsConfig
@@ -81,6 +87,8 @@ def make_physics_config(
         dt=dt,
         n_lat=int(len(lat_vals)),
         n_lon=int(len(lon_vals)),
+        U_bar=float(U_bar),
+        V_bar=float(V_bar),
     )
 
 
@@ -109,9 +117,13 @@ def _swe_tendency(
     dh_dx = _centered_diff_x(h, cfg.dx)
     dh_dy = _centered_diff_y(h, cfg.dy)
 
-    dh_dt = -cfg.H * (du_dx + dv_dy)
-    du_dt = -cfg.g * dh_dx + cfg.f0 * v
-    dv_dt = -cfg.g * dh_dy - cfg.f0 * u
+    dh_dt = -cfg.U_bar * dh_dx - cfg.V_bar * dh_dy - cfg.H * (du_dx + dv_dy)
+    du_dt = (-cfg.U_bar * _centered_diff_x(u, cfg.dx)
+             - cfg.V_bar * _centered_diff_y(u, cfg.dy)
+             - cfg.g * dh_dx + cfg.f0 * v)
+    dv_dt = (-cfg.U_bar * _centered_diff_x(v, cfg.dx)
+             - cfg.V_bar * _centered_diff_y(v, cfg.dy)
+             - cfg.g * dh_dy - cfg.f0 * u)
     return dh_dt, du_dt, dv_dt
 
 
