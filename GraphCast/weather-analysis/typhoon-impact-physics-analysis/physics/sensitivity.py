@@ -99,6 +99,7 @@ def compute_sensitivity_jax(
     target_time_idx: int,
     sigma_deg: float = 3.0,
     dt: float = 300.0,
+    constraint_mode: str = "none",
 ) -> SWESensitivityResult:
     n_steps = _n_steps_for(target_time_idx, dt)
     lead_h = (target_time_idx + 1) * 6
@@ -107,22 +108,55 @@ def compute_sensitivity_jax(
     u0_jax = jnp.array(u0)
     v0_jax = jnp.array(v0)
 
-    cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt)
-    weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg)
-    J_fn = make_target_J_fn(weights, cfg, n_steps)
-    grad_fn = jax.jit(jax.grad(J_fn, argnums=(0, 1, 2)))
+    if constraint_mode == "none":
+        cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt)
+        weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg)
+        J_fn = make_target_J_fn(weights, cfg, n_steps)
+        grad_fn = jax.jit(jax.grad(J_fn, argnums=(0, 1, 2)))
 
-    t0 = time.perf_counter()
-    print(f"[SWE-JAX] +{lead_h}h ({n_steps} steps) — compiling & computing...")
-    dJ_dh, dJ_du, dJ_dv = grad_fn(h0_jax, u0_jax, v0_jax)
-    elapsed = time.perf_counter() - t0
-    print(f"[SWE-JAX] done in {elapsed:.1f}s")
+        t0 = time.perf_counter()
+        print(f"[SWE-JAX] +{lead_h}h ({n_steps} steps) — compiling & computing...")
+        dJ_dh, dJ_du, dJ_dv = grad_fn(h0_jax, u0_jax, v0_jax)
+        elapsed = time.perf_counter() - t0
+        print(f"[SWE-JAX] done in {elapsed:.1f}s")
 
-    return _pack_result(
-        dJ_dh, dJ_du, dJ_dv,
-        target_time_idx, n_steps, "jax",
-        lat_vals, lon_vals, center_lat, center_lon, cfg, elapsed,
-    )
+        return _pack_result(
+            dJ_dh, dJ_du, dJ_dv,
+            target_time_idx, n_steps, "jax",
+            lat_vals, lon_vals, center_lat, center_lon, cfg, elapsed,
+        )
+
+    elif constraint_mode == "geostrophic_hard":
+        from physics.swe_model import geostrophic_wind_from_height
+
+        cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt)
+        weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg)
+
+        def J_geo(delta_h):
+            dh_u, dh_v = geostrophic_wind_from_height(delta_h, cfg)
+            h_in = h0_jax + delta_h
+            u_in = u0_jax + dh_u
+            v_in = v0_jax + dh_v
+            h_t, _, _ = swe_forward(h_in, u_in, v_in, cfg, n_steps)
+            return jnp.sum(weights * h_t)
+
+        geo_grad_fn = jax.jit(jax.grad(J_geo))
+        t0 = time.perf_counter()
+        print(f"[SWE-JAX-GEO-HARD] +{lead_h}h ({n_steps} steps) — compiling & computing...")
+        dJ_ddh = geo_grad_fn(jnp.zeros_like(h0_jax))
+        elapsed = time.perf_counter() - t0
+        print(f"[SWE-JAX-GEO-HARD] done in {elapsed:.1f}s")
+
+        raw_u, raw_v = geostrophic_wind_from_height(dJ_ddh, cfg)
+
+        return _pack_result(
+            dJ_ddh, raw_u, raw_v,
+            target_time_idx, n_steps, "jax_geo_hard",
+            lat_vals, lon_vals, center_lat, center_lon, cfg, elapsed,
+        )
+
+    else:
+        raise ValueError(f"Unknown constraint_mode: {constraint_mode}")
 
 
 def compute_sensitivity_fd(
