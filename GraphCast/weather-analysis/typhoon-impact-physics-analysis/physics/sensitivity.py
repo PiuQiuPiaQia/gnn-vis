@@ -174,6 +174,11 @@ def compute_sensitivity_jax(
     sigma_deg: float = 3.0,
     dt: float = 300.0,
     constraint_mode: str = "none",
+    eval_inputs=None,
+    dlm_inner_km: float = 300.0,
+    dlm_outer_km: float = 800.0,
+    dlm_p_bot_hpa: float = 850.0,
+    dlm_p_top_hpa: float = 300.0,
 ) -> SWESensitivityResult:
     n_steps = _n_steps_for(target_time_idx, dt)
     lead_h = (target_time_idx + 1) * 6
@@ -183,7 +188,17 @@ def compute_sensitivity_jax(
     v0_jax = jnp.array(v0)
 
     if constraint_mode == "none":
-        cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt)
+        U_bar, V_bar = 0.0, 0.0
+        if eval_inputs is not None:
+            U_bar, V_bar = compute_dlm_background_wind(
+                eval_inputs, center_lat, center_lon,
+                inner_radius_km=dlm_inner_km,
+                outer_radius_km=dlm_outer_km,
+                p_bot_hpa=dlm_p_bot_hpa,
+                p_top_hpa=dlm_p_top_hpa,
+            )
+            print(f"  DLM background wind: Ū={U_bar:+.2f} m/s  V̄={V_bar:+.2f} m/s")
+        cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt, U_bar=U_bar, V_bar=V_bar)
         weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg)
         J_fn = make_target_J_fn(weights, cfg, n_steps)
         grad_fn = jax.jit(jax.grad(J_fn, argnums=(0, 1, 2)))
@@ -203,7 +218,17 @@ def compute_sensitivity_jax(
     elif constraint_mode == "geostrophic_hard":
         from physics.swe_model import geostrophic_wind_from_height
 
-        cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt)
+        U_bar, V_bar = 0.0, 0.0
+        if eval_inputs is not None:
+            U_bar, V_bar = compute_dlm_background_wind(
+                eval_inputs, center_lat, center_lon,
+                inner_radius_km=dlm_inner_km,
+                outer_radius_km=dlm_outer_km,
+                p_bot_hpa=dlm_p_bot_hpa,
+                p_top_hpa=dlm_p_top_hpa,
+            )
+            print(f"  DLM background wind: Ū={U_bar:+.2f} m/s  V̄={V_bar:+.2f} m/s")
+        cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt, U_bar=U_bar, V_bar=V_bar)
         weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg)
 
         def J_geo(delta_h):

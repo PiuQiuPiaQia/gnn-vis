@@ -247,11 +247,21 @@ def run_physics_comparison(
     print(f"  h0 range: {h0.min():.0f}–{h0.max():.0f} m  "
           f"u0 range: {u0.min():.1f}–{u0.max():.1f} m/s")
 
+    dlm_inner_km = getattr(cfg, "SWE_DLM_INNER_KM", 300.0)
+    dlm_outer_km = getattr(cfg, "SWE_DLM_OUTER_KM", 800.0)
+    dlm_p_bot_hpa = getattr(cfg, "SWE_DLM_P_BOT_HPA", 850.0)
+    dlm_p_top_hpa = getattr(cfg, "SWE_DLM_P_TOP_HPA", 300.0)
+
     jax_result = compute_sensitivity_jax(
         h0, u0, v0, swe_lat, swe_lon,
         context.center_lat, context.center_lon,
         t_idx, sigma_deg=sigma_deg, dt=swe_dt,
         constraint_mode=constraint_mode,
+        eval_inputs=context.eval_inputs,
+        dlm_inner_km=dlm_inner_km,
+        dlm_outer_km=dlm_outer_km,
+        dlm_p_bot_hpa=dlm_p_bot_hpa,
+        dlm_p_top_hpa=dlm_p_top_hpa,
     )
 
     spsa_result: Optional[SWESensitivityResult] = None
