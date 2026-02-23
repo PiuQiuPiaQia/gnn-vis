@@ -74,6 +74,8 @@ DIR_PATH_STATS = "/root/data/stats"
 SWE_DOMAIN_HALF_DEG = 20.0      # 台风中心 ±20°（40°×40° 子域）
 SWE_SIGMA_DEG = 3.0             # 高斯目标函数 J 的标准差（度）
 SWE_DT = 300.0                  # 时间步长（秒），满足 CFL 条件
+# "none" (original) | "geostrophic_hard"
+SWE_CONSTRAINT_MODE = "none"
 
 PHYSICS_TOPK_VALUES = [20, 50, 100, 200]
 PHYSICS_PATCH_RADIUS = 2        # 与 PATCH_RADIUS 保持一致

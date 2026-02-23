@@ -235,6 +235,8 @@ def run_physics_comparison(
     domain_half = getattr(cfg, "SWE_DOMAIN_HALF_DEG", 20.0)
     sigma_deg   = getattr(cfg, "SWE_SIGMA_DEG", 3.0)
     swe_dt      = getattr(cfg, "SWE_DT", 300.0)
+    constraint_mode = getattr(cfg, "SWE_CONSTRAINT_MODE", "none")
+    print(f"  Constraint mode: {constraint_mode}")
 
     h0, u0, v0, swe_lat, swe_lon = extract_swe_initial_conditions(
         context.eval_inputs, context.center_lat, context.center_lon,
@@ -249,6 +251,7 @@ def run_physics_comparison(
         h0, u0, v0, swe_lat, swe_lon,
         context.center_lat, context.center_lon,
         t_idx, sigma_deg=sigma_deg, dt=swe_dt,
+        constraint_mode=constraint_mode,
     )
 
     spsa_result: Optional[SWESensitivityResult] = None
