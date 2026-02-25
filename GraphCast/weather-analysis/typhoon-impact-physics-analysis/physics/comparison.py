@@ -150,7 +150,7 @@ def _build_gnn_group_maps(
 
     parts = [x for x in [z_map, u_map, v_map] if x is not None]
     if parts:
-        out["total"] = sum(parts)
+        out["total"] = np.sum(np.stack(parts, axis=0), axis=0)
 
     return out
 
@@ -188,8 +188,10 @@ def run_physics_comparison() -> Dict[str, Any]:
     domain_half = getattr(cfg, "SWE_DOMAIN_HALF_DEG", 20.0)
     sigma_deg   = getattr(cfg, "SWE_SIGMA_DEG", 3.0)
     swe_dt      = getattr(cfg, "SWE_DT", 300.0)
+    core_radius_deg = float(getattr(cfg, "SWE_CORE_RADIUS_DEG", 3.0))
     constraint_mode = getattr(cfg, "SWE_CONSTRAINT_MODE", "none")
     print(f"  Constraint mode: {constraint_mode}")
+    print(f"  Core-mask radius: {core_radius_deg:.2f}°")
 
     h0, u0, v0, swe_lat, swe_lon = extract_swe_initial_conditions(
         context.eval_inputs, context.center_lat, context.center_lon,
@@ -204,6 +206,7 @@ def run_physics_comparison() -> Dict[str, Any]:
         h0, u0, v0, swe_lat, swe_lon,
         context.center_lat, context.center_lon,
         t_idx, sigma_deg=sigma_deg, dt=swe_dt,
+        core_radius_deg=core_radius_deg,
         constraint_mode=constraint_mode,
     )
 
@@ -231,7 +234,8 @@ def run_physics_comparison() -> Dict[str, Any]:
     print("\n[Phase 4] Saving Visualizations")
     dpi = getattr(cfg, "PHYSICS_HEATMAP_DPI", runtime_cfg.heatmap_dpi)
 
-    plot_sensitivity_heatmaps(jax_result, RESULTS_DIR, dpi=dpi)
+    suffix = f"core{core_radius_deg:g}".replace(".", "p") if core_radius_deg > 0.0 else ""
+    plot_sensitivity_heatmaps(jax_result, RESULTS_DIR, dpi=dpi, name_suffix=suffix)
     plot_comparison_panels(jax_result, gnn_ig_maps, RESULTS_DIR, dpi=dpi)
     plot_alignment_scatter(jax_result, gnn_ig_maps, report, RESULTS_DIR,
                            patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi)

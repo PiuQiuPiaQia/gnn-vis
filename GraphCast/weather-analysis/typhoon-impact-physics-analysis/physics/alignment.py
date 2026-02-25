@@ -233,6 +233,7 @@ def plot_sensitivity_heatmaps(
     swe_result: SWESensitivityResult,
     output_dir: Path,
     dpi: int = 200,
+    name_suffix: str = "",
 ) -> None:
     from shared.heatmap_utils import plot_importance_heatmap
 
@@ -240,6 +241,8 @@ def plot_sensitivity_heatmaps(
     lat, lon = swe_result.lat_vals, swe_result.lon_vals
     lead_h = (swe_result.target_time_idx + 1) * 6
     t = swe_result.target_time_idx
+    suffix = f"_{name_suffix}" if name_suffix else ""
+    title_suffix = f" ({name_suffix})" if name_suffix else ""
 
     for field_tag, arr, cbar_label in [
         ("h",     swe_result.S_h,     "|∂J/∂h₀|"),
@@ -247,13 +250,13 @@ def plot_sensitivity_heatmaps(
         ("total", swe_result.S_total, "S_h + S_uv"),
     ]:
         da = xarray.DataArray(arr, dims=("lat", "lon"), coords={"lat": lat, "lon": lon})
-        out = output_dir / f"swe_sensitivity_{field_tag}_t{t}.png"
+        out = output_dir / f"swe_sensitivity_{field_tag}{suffix}_t{t}.png"
         plot_importance_heatmap(
             importance_da=da,
             center_lat=swe_result.center_lat,
             center_lon=swe_result.center_lon,
             output_path=out,
-            title=f"SWE Physical Sensitivity $S_{{{field_tag}}}$ — +{lead_h}h",
+            title=f"SWE Physical Sensitivity $S_{{{field_tag}}}$ — +{lead_h}h{title_suffix}",
             cmap="magma",
             dpi=dpi,
             vmax_quantile=0.995,

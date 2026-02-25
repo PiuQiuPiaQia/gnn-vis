@@ -88,6 +88,45 @@ def _n_steps_for(target_time_idx: int, dt: float = 300.0) -> int:
     return int(round(lead_hours * 3600.0 / dt))
 
 
+def compute_environmental_steering_flow(
+    u0: np.ndarray,
+    v0: np.ndarray,
+    lat_vals: np.ndarray,
+    lon_vals: np.ndarray,
+    center_lat: float,
+    center_lon: float,
+    core_radius_deg: float,
+    min_env_points: int = 9,
+) -> Tuple[float, float, int, int, float]:
+    """Compute steering flow from environmental wind outside cyclone core."""
+    lat2d, lon2d = np.meshgrid(lat_vals, lon_vals, indexing="ij")
+    dlat = lat2d - center_lat
+    dlon = ((lon2d - center_lon + 180.0) % 360.0) - 180.0
+    radius = np.sqrt(dlat ** 2 + dlon ** 2)
+
+    if core_radius_deg <= 0.0:
+        env_mask = np.ones_like(radius, dtype=bool)
+    else:
+        env_mask = radius > core_radius_deg
+
+    finite_mask = np.isfinite(u0) & np.isfinite(v0)
+    total_points = int(u0.size)
+    valid_env_mask = env_mask & finite_mask
+    env_points = int(np.count_nonzero(valid_env_mask))
+
+    if env_points < min_env_points:
+        valid_env_mask = finite_mask
+        env_points = int(np.count_nonzero(valid_env_mask))
+
+    if env_points == 0:
+        return 0.0, 0.0, 0, total_points, 0.0
+
+    U_bar = float(np.mean(u0[valid_env_mask]))
+    V_bar = float(np.mean(v0[valid_env_mask]))
+    masked_ratio = 1.0 - float(env_points / max(total_points, 1))
+    return U_bar, V_bar, env_points, total_points, masked_ratio
+
+
 def compute_sensitivity_jax(
     h0: np.ndarray,
     u0: np.ndarray,
@@ -99,6 +138,7 @@ def compute_sensitivity_jax(
     target_time_idx: int,
     sigma_deg: float = 3.0,
     dt: float = 300.0,
+    core_radius_deg: float = 3.0,
     constraint_mode: str = "none",
 ) -> SWESensitivityResult:
     n_steps = _n_steps_for(target_time_idx, dt)
@@ -108,10 +148,17 @@ def compute_sensitivity_jax(
     u0_jax = jnp.array(u0)
     v0_jax = jnp.array(v0)
 
-    # 按用户方案：背景引导风取当前子域初始风场的空间平均。
-    U_bar = float(np.mean(u0))
-    V_bar = float(np.mean(v0))
-    print(f"  Mean background wind: U_bar={U_bar:+.2f} m/s  V_bar={V_bar:+.2f} m/s")
+    U_bar, V_bar, n_env, n_total, masked_ratio = compute_environmental_steering_flow(
+        u0=u0,
+        v0=v0,
+        lat_vals=lat_vals,
+        lon_vals=lon_vals,
+        center_lat=center_lat,
+        center_lon=center_lon,
+        core_radius_deg=core_radius_deg,
+    )
+    print(f"  Steering flow: U_bar={U_bar:+.2f} m/s  V_bar={V_bar:+.2f} m/s")
+    print(f"  Core mask radius={core_radius_deg:.2f}°  env_points={n_env}/{n_total}  masked_ratio={masked_ratio:.3f}")
 
     if constraint_mode == "none":
         cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt, U_bar=U_bar, V_bar=V_bar)
@@ -188,4 +235,3 @@ def _pack_result(
         physics_cfg=cfg,
         elapsed_sec=elapsed,
     )
-
