@@ -31,13 +31,7 @@ PERTURB_TIME = "all"  # "all" 或 0/1
 PERTURB_VARIABLES = None  # None = 所有含经纬度的变量
 PERTURB_LEVELS = None  # None = 所有气压层
 
-# 关键网格点排名输出配置（默认直接运行脚本即可）
-TOP_K_CANDIDATES = 200
-TOP_N_REPORT = 20
 INCLUDE_TARGET_INPUTS = False
-OUTPUT_CSV = "validation_results/typhoon_gridpoint_importance_ranking.csv"
-OUTPUT_IG_PNG = "validation_results/typhoon_ig_candidate_score.png"
-OUTPUT_ERF_PNG = "validation_results/typhoon_erf_explanation.png"
 
 # 基线设置：IG 与扰动验证统一使用
 BASELINE_MODE = "local_annulus_median"  # 可选: "spatial_mean" | "spatial_median" | "local_annulus_mean" | "local_annulus_median"
@@ -57,14 +51,6 @@ GRADIENT_ALPHA_QUANTILE = 0.90
 GRADIENT_VMAX_QUANTILE = 0.90
 GRADIENT_TIME_AGG = "single"  # "single" 或 "mean"，仅在 PERTURB_TIME="all" 时生效
 
-# ERF 参数
-ERF_ABS = True  # 使用 |输出对输入的偏导| 的幅值
-ERF_CMAP = "Blues"
-ERF_CENTER_WINDOW_DEG = 10.0
-ERF_CENTER_SCALE_QUANTILE = 0.99
-ERF_ALPHA_QUANTILE = 0.90
-ERF_VMAX_QUANTILE = 0.995
-
 # 路径
 DIR_PATH_PARAMS = "/root/data/params"
 DIR_PATH_DATASET = "/root/data/dataset"
@@ -77,15 +63,8 @@ SWE_DT = 300.0                  # 时间步长（秒），满足 CFL 条件
 # "none" (original) | "geostrophic_hard"
 SWE_CONSTRAINT_MODE = "geostrophic_hard"
 
-SWE_DLM_INNER_KM = 300.0   # 环形内半径 (km)
-SWE_DLM_OUTER_KM = 800.0   # 环形外半径 (km)
-SWE_DLM_P_BOT_HPA = 850.0  # DLM 积分下界 (hPa)
-SWE_DLM_P_TOP_HPA = 300.0  # DLM 积分上界 (hPa)
-
 PHYSICS_TOPK_VALUES = [20, 50, 100, 200]
 PHYSICS_PATCH_RADIUS = 2        # 与 PATCH_RADIUS 保持一致
 PHYSICS_PATCH_SCORE_AGG = "mean"
 
-PHYSICS_FD_MAX_POINTS = 200     # FD 验证采样点数（每点 6 次前向）
-PHYSICS_SPSA_N_DIRECTIONS = 64  # SPSA 随机方向数（共 2×N 次前向）
 PHYSICS_HEATMAP_DPI = 200

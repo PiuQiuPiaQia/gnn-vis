@@ -15,7 +15,6 @@ from shared.importance_common import _combined_target_scalar, reduce_input_attri
 from shared.model_utils import load_normalization_stats
 from shared.baseline import _build_climatology_baseline_inputs
 from physics.alignment import (
-    AlignmentReport,
     compute_alignment_report,
     plot_alignment_scatter,
     plot_comparison_panels,
@@ -24,12 +23,8 @@ from physics.alignment import (
     save_report_json,
 )
 from physics.sensitivity import (
-    SWESensitivityResult,
-    compute_sensitivity_fd,
     compute_sensitivity_jax,
-    compute_sensitivity_spsa,
     extract_swe_initial_conditions,
-    sensitivity_field_to_dataarray,
 )
 
 ROOT_DIR = Path(__file__).parent.parent if "__file__" in globals() else Path.cwd()
@@ -160,49 +155,7 @@ def _build_gnn_group_maps(
     return out
 
 
-def _save_fd_validation_plot(
-    fd_result: Dict[str, np.ndarray],
-    jax_result: SWESensitivityResult,
-    output_path: Path,
-    dpi: int = 200,
-) -> None:
-    import matplotlib.pyplot as plt
-    import scipy.stats
-
-    lat_idxs = fd_result["lat_idx"]
-    lon_idxs = fd_result["lon_idx"]
-
-    fig, axes = plt.subplots(1, 3, figsize=(13, 4), dpi=dpi)
-    for ax, (label, fd_vals, jax_full) in zip(
-        axes,
-        [
-            ("S_h", fd_result["fd_S_h"], jax_result.S_h),
-            ("S_u", fd_result["fd_S_u"], jax_result.S_u),
-            ("S_v", fd_result["fd_S_v"], jax_result.S_v),
-        ],
-    ):
-        jax_vals = jax_full[lat_idxs, lon_idxs]
-        rho, _ = scipy.stats.spearmanr(fd_vals, jax_vals)
-        ax.scatter(fd_vals, jax_vals, s=10, alpha=0.6, color="steelblue")
-        lim = max(float(fd_vals.max()), float(jax_vals.max())) * 1.1
-        ax.plot([0, lim], [0, lim], "r--", linewidth=1, label="y=x")
-        ax.set_xlabel(f"FD {label}")
-        ax.set_ylabel(f"JAX {label}")
-        ax.set_title(f"{label}: ρ={rho:.3f}")
-        ax.legend(fontsize=7)
-
-    fig.suptitle("Finite Difference vs JAX Autodiff Validation", fontsize=12)
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path)
-    plt.close(fig)
-    print(f"Saved: {output_path}")
-
-
-def run_physics_comparison(
-    with_spsa: bool = False,
-    validate_fd: bool = False,
-) -> Dict[str, Any]:
+def run_physics_comparison() -> Dict[str, Any]:
     import matplotlib
     matplotlib.use("Agg")
 
@@ -247,32 +200,12 @@ def run_physics_comparison(
     print(f"  h0 range: {h0.min():.0f}–{h0.max():.0f} m  "
           f"u0 range: {u0.min():.1f}–{u0.max():.1f} m/s")
 
-    dlm_inner_km = getattr(cfg, "SWE_DLM_INNER_KM", 300.0)
-    dlm_outer_km = getattr(cfg, "SWE_DLM_OUTER_KM", 800.0)
-    dlm_p_bot_hpa = getattr(cfg, "SWE_DLM_P_BOT_HPA", 850.0)
-    dlm_p_top_hpa = getattr(cfg, "SWE_DLM_P_TOP_HPA", 300.0)
-
     jax_result = compute_sensitivity_jax(
         h0, u0, v0, swe_lat, swe_lon,
         context.center_lat, context.center_lon,
         t_idx, sigma_deg=sigma_deg, dt=swe_dt,
         constraint_mode=constraint_mode,
-        eval_inputs=context.eval_inputs,
-        dlm_inner_km=dlm_inner_km,
-        dlm_outer_km=dlm_outer_km,
-        dlm_p_bot_hpa=dlm_p_bot_hpa,
-        dlm_p_top_hpa=dlm_p_top_hpa,
     )
-
-    spsa_result: Optional[SWESensitivityResult] = None
-    if with_spsa:
-        print("\n[Phase 1b] SWE Sensitivity (Method C: SPSA)")
-        n_dir = getattr(cfg, "PHYSICS_SPSA_N_DIRECTIONS", 64)
-        spsa_result = compute_sensitivity_spsa(
-            h0, u0, v0, swe_lat, swe_lon,
-            context.center_lat, context.center_lon,
-            t_idx, n_directions=n_dir, dt=swe_dt,
-        )
 
     print("\n[Phase 2] GNN IG for SWE-comparable vars (geopotential, u, v @ 500hPa)")
     gnn_ig_raw = _compute_gnn_ig_for_swe_vars(context, runtime_cfg, baseline_inputs)
@@ -295,19 +228,6 @@ def run_physics_comparison(
         k_values=k_values,
     )
 
-    if validate_fd:
-        print("\n[Phase 3b] FD Validation (Method B)")
-        fd_pts = getattr(cfg, "PHYSICS_FD_MAX_POINTS", 200)
-        fd_result = compute_sensitivity_fd(
-            h0, u0, v0, swe_lat, swe_lon,
-            context.center_lat, context.center_lon,
-            t_idx, max_points=fd_pts, dt=swe_dt,
-        )
-        _save_fd_validation_plot(
-            fd_result, jax_result,
-            RESULTS_DIR / f"physics_sensitivity_fd_validation_t{t_idx}.png",
-        )
-
     print("\n[Phase 4] Saving Visualizations")
     dpi = getattr(cfg, "PHYSICS_HEATMAP_DPI", runtime_cfg.heatmap_dpi)
 
@@ -318,10 +238,6 @@ def run_physics_comparison(
     plot_topk_iou_curves(jax_result, gnn_ig_maps, RESULTS_DIR,
                          k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi)
 
-    if with_spsa and spsa_result is not None:
-        print("\n[Phase 4b] SPSA heatmaps")
-        plot_sensitivity_heatmaps(spsa_result, RESULTS_DIR, dpi=dpi)
-
     json_path = RESULTS_DIR / "physics_alignment_metrics.json"
     save_report_json(report, json_path)
 
@@ -331,7 +247,6 @@ def run_physics_comparison(
 
     return {
         "jax_result": jax_result,
-        "spsa_result": spsa_result,
         "gnn_ig_maps": gnn_ig_maps,
         "report": report,
         "elapsed_sec": elapsed,

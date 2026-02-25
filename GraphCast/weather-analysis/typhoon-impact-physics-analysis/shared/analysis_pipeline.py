@@ -29,8 +29,6 @@ class AnalysisConfig:
     local_baseline_min_points: int
     heatmap_dpi: int
     gradient_steps: int
-    top_k_candidates: int
-    top_n_report: int
     include_target_inputs: bool
     gradient_vmax_quantile: float
     gradient_cmap: str
@@ -38,15 +36,6 @@ class AnalysisConfig:
     gradient_center_scale_quantile: float
     gradient_alpha_quantile: Optional[float]
     gradient_time_agg: str
-    erf_abs: bool
-    erf_vmax_quantile: float
-    erf_cmap: str
-    erf_center_window_deg: float
-    erf_center_scale_quantile: float
-    erf_alpha_quantile: Optional[float]
-    output_csv: str
-    output_ig_png: Optional[str]
-    output_erf_png: Optional[str]
     dir_path_params: str
     dir_path_dataset: str
     dir_path_stats: str
@@ -54,16 +43,6 @@ class AnalysisConfig:
     @classmethod
     def from_module(cls, cfg_module) -> "AnalysisConfig":
         target_variables = getattr(cfg_module, "TARGET_VARIABLES", None)
-        output_ig_png = getattr(
-            cfg_module,
-            "OUTPUT_IG_PNG",
-            "validation_results/typhoon_ig_candidate_score.png",
-        )
-        output_erf_png = getattr(
-            cfg_module,
-            "OUTPUT_ERF_PNG",
-            "validation_results/typhoon_erf_explanation.png",
-        )
         return cls(
             dataset_configs=cfg_module.DATASET_CONFIGS,
             dataset_type=cfg_module.DATASET_TYPE,
@@ -83,8 +62,6 @@ class AnalysisConfig:
             local_baseline_min_points=int(getattr(cfg_module, "LOCAL_BASELINE_MIN_POINTS", 120)),
             heatmap_dpi=int(cfg_module.HEATMAP_DPI),
             gradient_steps=int(getattr(cfg_module, "IG_STEPS", 50)),
-            top_k_candidates=int(getattr(cfg_module, "TOP_K_CANDIDATES", 200)),
-            top_n_report=int(getattr(cfg_module, "TOP_N_REPORT", 20)),
             include_target_inputs=bool(getattr(cfg_module, "INCLUDE_TARGET_INPUTS", False)),
             gradient_vmax_quantile=float(getattr(cfg_module, "GRADIENT_VMAX_QUANTILE", 0.995)),
             gradient_cmap=getattr(cfg_module, "GRADIENT_CMAP", "RdBu_r"),
@@ -92,19 +69,6 @@ class AnalysisConfig:
             gradient_center_scale_quantile=float(getattr(cfg_module, "GRADIENT_CENTER_SCALE_QUANTILE", 0.99)),
             gradient_alpha_quantile=getattr(cfg_module, "GRADIENT_ALPHA_QUANTILE", 0.90),
             gradient_time_agg=getattr(cfg_module, "GRADIENT_TIME_AGG", "single"),
-            erf_abs=bool(getattr(cfg_module, "ERF_ABS", True)),
-            erf_vmax_quantile=float(getattr(cfg_module, "ERF_VMAX_QUANTILE", 0.995)),
-            erf_cmap=getattr(cfg_module, "ERF_CMAP", "Blues"),
-            erf_center_window_deg=float(getattr(cfg_module, "ERF_CENTER_WINDOW_DEG", 10.0)),
-            erf_center_scale_quantile=float(getattr(cfg_module, "ERF_CENTER_SCALE_QUANTILE", 0.99)),
-            erf_alpha_quantile=getattr(cfg_module, "ERF_ALPHA_QUANTILE", 0.90),
-            output_csv=getattr(
-                cfg_module,
-                "OUTPUT_CSV",
-                "validation_results/typhoon_gridpoint_importance_ranking.csv",
-            ),
-            output_ig_png=output_ig_png if output_ig_png else None,
-            output_erf_png=output_erf_png if output_erf_png else None,
             dir_path_params=cfg_module.DIR_PATH_PARAMS,
             dir_path_dataset=cfg_module.DIR_PATH_DATASET,
             dir_path_stats=cfg_module.DIR_PATH_STATS,

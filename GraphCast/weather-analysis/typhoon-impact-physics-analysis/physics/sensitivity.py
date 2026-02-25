@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Tuple
+from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -88,80 +88,6 @@ def _n_steps_for(target_time_idx: int, dt: float = 300.0) -> int:
     return int(round(lead_hours * 3600.0 / dt))
 
 
-def compute_dlm_background_wind(
-    eval_inputs: xarray.Dataset,
-    center_lat: float,
-    center_lon: float,
-    inner_radius_km: float = 300.0,
-    outer_radius_km: float = 800.0,
-    p_bot_hpa: float = 850.0,
-    p_top_hpa: float = 300.0,
-    time_idx: int = 1,
-) -> tuple:
-    """深层平均引导风 (DLM Steering) — 环形平均 + 质量加权垂直积分。
-
-    Args:
-        eval_inputs:      ERA5 xarray Dataset，含 u/v_component_of_wind。
-        center_lat/lon:   台风中心坐标（度）。
-        inner_radius_km:  环形内半径 (km)。
-        outer_radius_km:  环形外半径 (km)。
-        p_bot_hpa:        垂直积分下界压力层 (hPa)。
-        p_top_hpa:        垂直积分上界压力层 (hPa)。
-        time_idx:         时间步索引（0 = 分析时刻，1 = +6h）。
-
-    Returns:
-        (U_bar, V_bar) in m/s — Python floats.
-    """
-    DEG_TO_M = 111320.0
-
-    lat_all = eval_inputs.coords["lat"].values.astype(float)
-    lon_all = eval_inputs.coords["lon"].values.astype(float)
-
-    # 计算每个格点到台风中心的距离 (km)
-    dlat_m = (lat_all - center_lat) * DEG_TO_M
-    dlon_deg = ((lon_all - center_lon + 180.0) % 360.0) - 180.0
-    cos_lat = np.cos(np.deg2rad(center_lat))
-    dlon_m = dlon_deg * DEG_TO_M * cos_lat
-
-    lat2d, lon2d = np.meshgrid(dlat_m, dlon_m, indexing="ij")
-    dist_km = np.sqrt(lat2d ** 2 + lon2d ** 2) / 1000.0
-    annulus_mask = (dist_km >= inner_radius_km) & (dist_km <= outer_radius_km)
-
-    if not np.any(annulus_mask):
-        return 0.0, 0.0
-
-    def _extract_var(var_name: str) -> xarray.DataArray:
-        da = eval_inputs[var_name]
-        if "batch" in da.dims:
-            da = da.isel(batch=0)
-        if "time" in da.dims:
-            da = da.isel(time=time_idx)
-        return da  # shape (level, lat, lon)
-
-    u_da = _extract_var(_ERA5_U_VAR)
-    v_da = _extract_var(_ERA5_V_VAR)
-    levels = u_da.coords["level"].values.astype(float)
-
-    # 选择 p_top ≤ level ≤ p_bot 的层
-    lev_mask = (levels >= p_top_hpa) & (levels <= p_bot_hpa)
-    if not np.any(lev_mask):
-        return 0.0, 0.0
-    selected_levels = levels[lev_mask]
-
-    u_arr = np.asarray(u_da.values)[lev_mask]  # (n_lev, n_lat, n_lon)
-    v_arr = np.asarray(v_da.values)[lev_mask]
-
-    # 环形空间平均 → (n_lev,)
-    u_prof = np.array([u_arr[k][annulus_mask].mean() for k in range(u_arr.shape[0])])
-    v_prof = np.array([v_arr[k][annulus_mask].mean() for k in range(v_arr.shape[0])])
-
-    # 质量加权垂直积分（梯形法）
-    dp = np.abs(np.diff(selected_levels))
-    u_bar = float(np.sum((u_prof[:-1] + u_prof[1:]) / 2.0 * dp) / dp.sum())
-    v_bar = float(np.sum((v_prof[:-1] + v_prof[1:]) / 2.0 * dp) / dp.sum())
-    return u_bar, v_bar
-
-
 def compute_sensitivity_jax(
     h0: np.ndarray,
     u0: np.ndarray,
@@ -174,11 +100,6 @@ def compute_sensitivity_jax(
     sigma_deg: float = 3.0,
     dt: float = 300.0,
     constraint_mode: str = "none",
-    eval_inputs=None,
-    dlm_inner_km: float = 300.0,
-    dlm_outer_km: float = 800.0,
-    dlm_p_bot_hpa: float = 850.0,
-    dlm_p_top_hpa: float = 300.0,
 ) -> SWESensitivityResult:
     n_steps = _n_steps_for(target_time_idx, dt)
     lead_h = (target_time_idx + 1) * 6
@@ -187,17 +108,12 @@ def compute_sensitivity_jax(
     u0_jax = jnp.array(u0)
     v0_jax = jnp.array(v0)
 
+    # 按用户方案：背景引导风取当前子域初始风场的空间平均。
+    U_bar = float(np.mean(u0))
+    V_bar = float(np.mean(v0))
+    print(f"  Mean background wind: U_bar={U_bar:+.2f} m/s  V_bar={V_bar:+.2f} m/s")
+
     if constraint_mode == "none":
-        U_bar, V_bar = 0.0, 0.0
-        if eval_inputs is not None:
-            U_bar, V_bar = compute_dlm_background_wind(
-                eval_inputs, center_lat, center_lon,
-                inner_radius_km=dlm_inner_km,
-                outer_radius_km=dlm_outer_km,
-                p_bot_hpa=dlm_p_bot_hpa,
-                p_top_hpa=dlm_p_top_hpa,
-            )
-            print(f"  DLM background wind: Ū={U_bar:+.2f} m/s  V̄={V_bar:+.2f} m/s")
         cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt, U_bar=U_bar, V_bar=V_bar)
         weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg)
         J_fn = make_target_J_fn(weights, cfg, n_steps)
@@ -218,16 +134,6 @@ def compute_sensitivity_jax(
     elif constraint_mode == "geostrophic_hard":
         from physics.swe_model import geostrophic_wind_from_height
 
-        U_bar, V_bar = 0.0, 0.0
-        if eval_inputs is not None:
-            U_bar, V_bar = compute_dlm_background_wind(
-                eval_inputs, center_lat, center_lon,
-                inner_radius_km=dlm_inner_km,
-                outer_radius_km=dlm_outer_km,
-                p_bot_hpa=dlm_p_bot_hpa,
-                p_top_hpa=dlm_p_top_hpa,
-            )
-            print(f"  DLM background wind: Ū={U_bar:+.2f} m/s  V̄={V_bar:+.2f} m/s")
         cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt, U_bar=U_bar, V_bar=V_bar)
         weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg)
 
@@ -258,137 +164,6 @@ def compute_sensitivity_jax(
         raise ValueError(f"Unknown constraint_mode: {constraint_mode}")
 
 
-def compute_sensitivity_fd(
-    h0: np.ndarray,
-    u0: np.ndarray,
-    v0: np.ndarray,
-    lat_vals: np.ndarray,
-    lon_vals: np.ndarray,
-    center_lat: float,
-    center_lon: float,
-    target_time_idx: int,
-    eps_fraction: float = 1e-4,
-    max_points: int = 200,
-    seed: int = 0,
-    dt: float = 300.0,
-) -> Dict[str, np.ndarray]:
-    n_steps = _n_steps_for(target_time_idx, dt)
-
-    cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt)
-    weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg=3.0)
-
-    eps_h = eps_fraction * (float(np.std(h0)) + 1e-6)
-    eps_u = eps_fraction * (float(np.std(u0)) + 1e-6)
-    eps_v = eps_fraction * (float(np.std(v0)) + 1e-6)
-
-    n_lat, n_lon = h0.shape
-    rng = np.random.RandomState(seed)
-    n_sample = min(max_points, n_lat * n_lon)
-    flat_idx = rng.choice(n_lat * n_lon, size=n_sample, replace=False)
-    lat_idxs = flat_idx // n_lon
-    lon_idxs = flat_idx % n_lon
-
-    def _J(h_, u_, v_) -> float:
-        h_t, _, _ = swe_forward(jnp.array(h_), jnp.array(u_), jnp.array(v_), cfg, n_steps)
-        return float(jnp.sum(weights * h_t))
-
-    fd_S_h = np.zeros(n_sample)
-    fd_S_u = np.zeros(n_sample)
-    fd_S_v = np.zeros(n_sample)
-
-    print(f"[SWE-FD] validating {n_sample} points (6×N = {6*n_sample} fwd runs)...")
-    for k, (li, lj) in enumerate(zip(lat_idxs, lon_idxs)):
-        h_p = h0.copy(); h_p[li, lj] += eps_h
-        h_m = h0.copy(); h_m[li, lj] -= eps_h
-        fd_S_h[k] = abs((_J(h_p, u0, v0) - _J(h_m, u0, v0)) / (2 * eps_h))
-
-        u_p = u0.copy(); u_p[li, lj] += eps_u
-        u_m = u0.copy(); u_m[li, lj] -= eps_u
-        fd_S_u[k] = abs((_J(h0, u_p, v0) - _J(h0, u_m, v0)) / (2 * eps_u))
-
-        v_p = v0.copy(); v_p[li, lj] += eps_v
-        v_m = v0.copy(); v_m[li, lj] -= eps_v
-        fd_S_v[k] = abs((_J(h0, u0, v_p) - _J(h0, u0, v_m)) / (2 * eps_v))
-
-        if (k + 1) % 50 == 0 or k + 1 == n_sample:
-            print(f"  FD: {k+1}/{n_sample}")
-
-    return {
-        "lat_idx": lat_idxs,
-        "lon_idx": lon_idxs,
-        "fd_S_h": fd_S_h,
-        "fd_S_u": fd_S_u,
-        "fd_S_v": fd_S_v,
-    }
-
-
-def compute_sensitivity_spsa(
-    h0: np.ndarray,
-    u0: np.ndarray,
-    v0: np.ndarray,
-    lat_vals: np.ndarray,
-    lon_vals: np.ndarray,
-    center_lat: float,
-    center_lon: float,
-    target_time_idx: int,
-    n_directions: int = 64,
-    eps_fraction: float = 5e-4,
-    seed: int = 42,
-    dt: float = 300.0,
-) -> SWESensitivityResult:
-    n_steps = _n_steps_for(target_time_idx, dt)
-    lead_h = (target_time_idx + 1) * 6
-
-    cfg = make_physics_config(lat_vals, lon_vals, h0_mean=float(np.mean(h0)), dt=dt)
-    weights = make_gaussian_weights(lat_vals, lon_vals, center_lat, center_lon, sigma_deg=3.0)
-
-    eps_h = eps_fraction * (float(np.std(h0)) + 1e-6)
-    eps_u = eps_fraction * (float(np.std(u0)) + 1e-6)
-    eps_v = eps_fraction * (float(np.std(v0)) + 1e-6)
-
-    rng = np.random.RandomState(seed)
-    grad_h = np.zeros_like(h0, dtype=np.float64)
-    grad_u = np.zeros_like(u0, dtype=np.float64)
-    grad_v = np.zeros_like(v0, dtype=np.float64)
-
-    def _J(h_, u_, v_) -> float:
-        h_t, _, _ = swe_forward(jnp.array(h_), jnp.array(u_), jnp.array(v_), cfg, n_steps)
-        return float(jnp.sum(weights * h_t))
-
-    t0 = time.perf_counter()
-    print(f"[SWE-SPSA] +{lead_h}h, {n_directions} directions ({2*n_directions} fwd runs)...")
-    for k in range(n_directions):
-        dh = rng.choice([-1.0, 1.0], size=h0.shape).astype(np.float64)
-        du = rng.choice([-1.0, 1.0], size=u0.shape).astype(np.float64)
-        dv = rng.choice([-1.0, 1.0], size=v0.shape).astype(np.float64)
-
-        J_plus  = _J((h0 + eps_h * dh).astype(np.float32),
-                     (u0 + eps_u * du).astype(np.float32),
-                     (v0 + eps_v * dv).astype(np.float32))
-        J_minus = _J((h0 - eps_h * dh).astype(np.float32),
-                     (u0 - eps_u * du).astype(np.float32),
-                     (v0 - eps_v * dv).astype(np.float32))
-        g_hat = (J_plus - J_minus) / 2.0
-
-        grad_h += g_hat * dh / eps_h
-        grad_u += g_hat * du / eps_u
-        grad_v += g_hat * dv / eps_v
-
-        if (k + 1) % 16 == 0 or k + 1 == n_directions:
-            print(f"  SPSA: {k+1}/{n_directions}")
-
-    grad_h /= n_directions
-    grad_u /= n_directions
-    grad_v /= n_directions
-    elapsed = time.perf_counter() - t0
-
-    return _pack_result(
-        grad_h, grad_u, grad_v,
-        target_time_idx, n_steps, "spsa",
-        lat_vals, lon_vals, center_lat, center_lon, cfg, elapsed,
-    )
-
-
 def _pack_result(
     raw_h, raw_u, raw_v,
     target_time_idx, n_steps, method,
@@ -414,16 +189,3 @@ def _pack_result(
         elapsed_sec=elapsed,
     )
 
-
-def sensitivity_field_to_dataarray(
-    field: np.ndarray,
-    lat_vals: np.ndarray,
-    lon_vals: np.ndarray,
-    name: str,
-) -> xarray.DataArray:
-    return xarray.DataArray(
-        field,
-        dims=("lat", "lon"),
-        coords={"lat": lat_vals, "lon": lon_vals},
-        name=name,
-    )

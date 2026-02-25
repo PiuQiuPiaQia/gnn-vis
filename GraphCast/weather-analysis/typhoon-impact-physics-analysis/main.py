@@ -7,8 +7,6 @@ from __future__ import annotations
 import argparse
 from typing import Optional
 
-from model.ranking import run_gridpoint_importance_ranking
-
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -17,26 +15,17 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser(
-        "ranking",
-        help="Run IG + patch importance ranking",
-    )
-
-    subparsers.add_parser(
         "compare",
         help="Run model receptive-field / physics comparison",
     )
 
-    parser.set_defaults(command="ranking")
+    parser.set_defaults(command="compare")
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-
-    if args.command == "ranking":
-        run_gridpoint_importance_ranking()
-        return 0
 
     if args.command == "compare":
         from physics.comparison import run_physics_comparison
