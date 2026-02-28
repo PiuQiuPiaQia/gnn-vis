@@ -169,6 +169,9 @@ cython_debug/
 
 opencode.json
 
+# Local git worktrees
+.worktrees/
+
 # CCB session files
 .ccb/.claude-session
 .ccb/.codex-session
