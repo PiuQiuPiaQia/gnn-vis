@@ -7,7 +7,7 @@ import numpy as np
 import xarray
 
 from shared.analysis_pipeline import AnalysisConfig, AnalysisContext
-from shared.importance_common import _combined_target_scalar, reduce_input_attribution_to_latlon
+from shared.importance_common import reduce_input_attribution_to_latlon, target_scalar
 
 
 def _compute_erf_explanation_map(
@@ -16,7 +16,7 @@ def _compute_erf_explanation_map(
     vars_to_use: List[str],
 ) -> xarray.DataArray:
     def _loss(inputs_data):
-        return _combined_target_scalar(context, runtime_cfg, inputs_data)
+        return target_scalar(context, runtime_cfg, inputs_data, context.target_var)
 
     grad_fn = jax.grad(_loss)
     grads = grad_fn(context.eval_inputs)

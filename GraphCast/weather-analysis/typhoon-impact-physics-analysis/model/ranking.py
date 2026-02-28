@@ -219,15 +219,3 @@ def run_gridpoint_importance_ranking() -> Dict[str, Any]:
         },
         "output_csv": str(csv_path),
     }
-
-
-def main() -> int:
-    run_gridpoint_importance_ranking()
-    print("done")
-    return 0
-
-
-if __name__ == "__main__":
-    exit_code = main()
-    if exit_code != 0:
-        raise SystemExit(exit_code)
