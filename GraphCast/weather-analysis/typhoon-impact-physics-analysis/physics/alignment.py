@@ -35,6 +35,15 @@ class AlignmentReport:
 
     def as_dict(self) -> dict:
         return {
+            "_comment": "SWE physical sensitivity and GNN IG alignment metrics.",
+            "_field_notes": {
+                "target_time_idx": "Forecast lead index. 0 means +6h, 1 means +12h, etc.",
+                "lead_time_h": "Forecast lead time in hours.",
+                "patch_radius": "Radius used for local patch aggregation before metrics.",
+                "patch_score_agg": "Aggregation method for patch scoring.",
+                "sigma_deg": "Gaussian target width (degrees) used in sensitivity objective.",
+                "groups": "Per-variable-group alignment metrics (h and uv).",
+            },
             "target_time_idx": self.target_time_idx,
             "lead_time_h": self.lead_time_h,
             "patch_radius": self.patch_radius,
@@ -42,11 +51,13 @@ class AlignmentReport:
             "sigma_deg": self.sigma_deg,
             "groups": {
                 g.group_name: {
+                    "_comment": "Rank/overlap consistency between SWE map and GNN IG map.",
                     "spearman_rho": round(g.spearman_rho, 4),
                     "spearman_pval": float(f"{g.spearman_pval:.2e}"),
                     "kendall_tau": round(g.kendall_tau, 4),
                     "kendall_pval": float(f"{g.kendall_pval:.2e}"),
                     "topk_iou": {f"k{k}": round(v, 4) for k, v in g.topk_iou.items()},
+                    "_topk_iou_note": "IoU of top-K hotspots between SWE and GNN maps.",
                     "n_valid": g.n_valid,
                 }
                 for g in self.groups
@@ -175,7 +186,6 @@ def compute_alignment_report(
     pairs = [
         ("h",     swe_result.S_h,     "z_500"),
         ("uv",    swe_result.S_uv,    "uv_500"),
-        ("total", swe_result.S_total, "total"),
     ]
     for group_name, swe_map, gnn_key in pairs:
         if gnn_key not in gnn_ig_maps:
@@ -206,8 +216,7 @@ def plot_comparison_panels(
 
     groups = [
         ("h",     swe_result.S_h,     "z_500",  "SWE $S_h$",    "GNN IG (z₅₀₀)",    "|∂J/∂h₀|"),
-        ("uv",    swe_result.S_uv,    "uv_500", "SWE $S_{uv}$", "GNN IG (u₅₀₀+v₅₀₀)", "|∂J/∂(u,v)₀|"),
-        ("total", swe_result.S_total, "total",  "SWE $S_{total}$","GNN IG (total)",   "S_total"),
+        ("uv",    swe_result.S_uv,    "uv_500", "SWE $S_{uv}$", "GNN IG (uv magnitude)", "|∂J/∂(u,v)₀|"),
     ]
 
     def _norm_q(x: np.ndarray) -> np.ndarray:
@@ -265,7 +274,6 @@ def plot_sensitivity_heatmaps(
     for field_tag, arr, cbar_label in [
         ("h",     swe_result.S_h,     "|∂J/∂h₀|"),
         ("uv",    swe_result.S_uv,    "√(|∂J/∂u₀|²+|∂J/∂v₀|²)"),
-        ("total", swe_result.S_total, "S_h + S_uv"),
     ]:
         if log_scale:
             arr_plot = np.log10(np.maximum(arr, 0.0) + float(log_eps))
@@ -313,12 +321,12 @@ def plot_alignment_scatter(
 
     pairs = [
         ("h",     swe_result.S_h,     "z_500",  "SWE $S_h$",    "GNN IG (z₅₀₀)"),
-        ("uv",    swe_result.S_uv,    "uv_500", "SWE $S_{uv}$", "GNN IG (u+v)"),
-        ("total", swe_result.S_total, "total",  "SWE $S_{total}$","GNN IG (total)"),
+        ("uv",    swe_result.S_uv,    "uv_500", "SWE $S_{uv}$", "GNN IG (uv magnitude)"),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5), dpi=dpi)
-    for ax, (gname, swe_arr, gnn_key, xlabel, ylabel) in zip(axes, pairs):
+    fig, axes = plt.subplots(1, len(pairs), figsize=(5 * len(pairs), 5), dpi=dpi)
+    axes_list = np.atleast_1d(axes)
+    for ax, (gname, swe_arr, gnn_key, xlabel, ylabel) in zip(axes_list, pairs):
         if gnn_key not in gnn_ig_maps:
             ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
             ax.set_title(gname)
@@ -369,9 +377,8 @@ def plot_topk_iou_curves(
     pairs = [
         ("h",     swe_result.S_h,     "z_500"),
         ("uv",    swe_result.S_uv,    "uv_500"),
-        ("total", swe_result.S_total, "total"),
     ]
-    colors = {"h": "royalblue", "uv": "tomato", "total": "seagreen"}
+    colors = {"h": "royalblue", "uv": "tomato"}
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
     for gname, swe_arr, gnn_key in pairs:

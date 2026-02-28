@@ -294,15 +294,11 @@ def _build_gnn_group_maps(
     if z_map is not None:
         out["z_500"] = z_map
     if u_map is not None and v_map is not None:
-        out["uv_500"] = u_map + v_map
+        out["uv_500"] = np.sqrt(u_map ** 2 + v_map ** 2)
     elif u_map is not None:
         out["uv_500"] = u_map
     elif v_map is not None:
         out["uv_500"] = v_map
-
-    parts = [x for x in [z_map, u_map, v_map] if x is not None]
-    if parts:
-        out["total"] = np.sum(np.stack(parts, axis=0), axis=0)
 
     return out
 

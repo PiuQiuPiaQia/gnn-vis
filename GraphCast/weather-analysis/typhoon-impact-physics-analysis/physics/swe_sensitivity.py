@@ -33,7 +33,6 @@ class SWESensitivityResult:
     S_u: np.ndarray
     S_v: np.ndarray
     S_uv: np.ndarray
-    S_total: np.ndarray
     dJ_dh_signed: np.ndarray  # raw ∂J/∂h₀，保留符号（用于上游拉伸诊断）
 
     lat_vals: np.ndarray
@@ -280,7 +279,6 @@ def _pack_result(
         S_u=S_u,
         S_v=S_v,
         S_uv=np.sqrt(S_u ** 2 + S_v ** 2),
-        S_total=S_h + np.sqrt(S_u ** 2 + S_v ** 2),
         dJ_dh_signed=dJ_dh_signed,
         lat_vals=lat_vals,
         lon_vals=lon_vals,
