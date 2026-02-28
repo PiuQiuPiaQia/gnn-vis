@@ -28,8 +28,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "compare":
-        from physics.comparison import run_physics_comparison
-        run_physics_comparison()
+        from physics.comparison import run_physics_comparison_v2
+        run_physics_comparison_v2()
         return 0
 
     parser.error(f"unsupported command: {args.command}")

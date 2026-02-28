@@ -15,9 +15,7 @@ class AnalysisConfig:
     dataset_type: str
     target_time_idx: int
     target_variable: str
-    target_variables: Optional[List[str]]
     target_level: Any
-    target_levels: Dict[str, Any]
     patch_radius: int
     patch_score_agg: str
     perturb_time: Any
@@ -42,15 +40,12 @@ class AnalysisConfig:
 
     @classmethod
     def from_module(cls, cfg_module) -> "AnalysisConfig":
-        target_variables = getattr(cfg_module, "TARGET_VARIABLES", None)
         return cls(
             dataset_configs=cfg_module.DATASET_CONFIGS,
             dataset_type=cfg_module.DATASET_TYPE,
             target_time_idx=int(cfg_module.TARGET_TIME_IDX),
             target_variable=cfg_module.TARGET_VARIABLE,
-            target_variables=list(target_variables) if target_variables is not None else None,
             target_level=getattr(cfg_module, "TARGET_LEVEL", None),
-            target_levels=getattr(cfg_module, "TARGET_LEVELS", {}),
             patch_radius=int(cfg_module.PATCH_RADIUS),
             patch_score_agg=str(getattr(cfg_module, "PATCH_SCORE_AGG", "mean")),
             perturb_time=cfg_module.PERTURB_TIME,
@@ -85,19 +80,10 @@ class AnalysisContext:
     targets_template: Any
     center_lat: float
     center_lon: float
-    target_vars: List[str]
-    base_values: Dict[str, float]
+    target_var: str
+    base_value: float
     lat_vals: Any
     lon_vals: Any
-
-
-def resolve_target_variables(
-    target_variable: str,
-    target_variables: Optional[List[str]],
-) -> List[str]:
-    if target_variables:
-        return list(target_variables)
-    return [target_variable]
 
 
 def resolve_spatial_variables(
@@ -114,12 +100,11 @@ def resolve_spatial_variables(
     return [var_name for var_name in perturb_variables if var_name in eval_inputs.data_vars]
 
 
-def select_target_data(outputs, var: str, target_levels: Dict[str, Any], target_level: Any):
+def select_target_data(outputs, var: str, target_level: Any):
     data = outputs[var]
     if "level" in data.dims:
-        level = target_levels.get(var, target_level)
-        if level is not None:
-            data = data.sel(level=level)
+        if target_level is not None:
+            data = data.sel(level=target_level)
     return data
 
 
@@ -181,28 +166,25 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
         forcings=eval_forcings,
     )
 
-    target_vars = resolve_target_variables(runtime_cfg.target_variable, runtime_cfg.target_variables)
-    print(f"target_variables: {', '.join(target_vars)}")
+    target_var = runtime_cfg.target_variable
+    print(f"target_variable: {target_var}")
 
     spatial_vars = resolve_spatial_variables(runtime_cfg.perturb_variables, eval_inputs)
     if not spatial_vars:
         raise ValueError("No spatial input variables found")
     print(f"spatial input vars: {len(spatial_vars)}")
 
-    base_values: Dict[str, float] = {}
-    for var in target_vars:
-        target_data = select_target_data(
-            base_outputs,
-            var,
-            target_levels=runtime_cfg.target_levels,
-            target_level=runtime_cfg.target_level,
-        )
-        base_values[var] = target_data.isel(time=runtime_cfg.target_time_idx).sel(
-            lat=center_lat,
-            lon=center_lon,
-            method="nearest",
-        ).values.item()
-        print(f"Baseline {var}: {base_values[var]:.4f} at ({center_lat:.2f}, {center_lon:.2f})")
+    target_data = select_target_data(
+        base_outputs,
+        target_var,
+        target_level=runtime_cfg.target_level,
+    )
+    base_value = target_data.isel(time=runtime_cfg.target_time_idx).sel(
+        lat=center_lat,
+        lon=center_lon,
+        method="nearest",
+    ).values.item()
+    print(f"Baseline {target_var}: {base_value:.4f} at ({center_lat:.2f}, {center_lon:.2f})")
 
     lat_vals = eval_inputs.coords["lat"].values
     lon_vals = eval_inputs.coords["lon"].values
@@ -216,8 +198,8 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
         targets_template=targets_template,
         center_lat=center_lat,
         center_lon=center_lon,
-        target_vars=target_vars,
-        base_values=base_values,
+        target_var=target_var,
+        base_value=base_value,
         lat_vals=lat_vals,
         lon_vals=lon_vals,
     )

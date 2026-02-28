@@ -224,7 +224,7 @@ def plot_importance_heatmap(
     title: str,
     cmap: str = "magma",
     dpi: int = 200,
-    vmax_quantile: float = 0.995,
+    vmax_quantile: Optional[float] = 0.995,
     diverging: bool = False,
     cbar_label: Optional[str] = None,
     center_window_deg: float = 10.0,
@@ -387,4 +387,3 @@ def plot_importance_heatmap_panels(
     fig.tight_layout()
     fig.savefig(output_path)
     plt.close(fig)
-

@@ -26,7 +26,6 @@ def target_scalar(
     out_var = select_target_data(
         outputs,
         target_var,
-        target_levels=runtime_cfg.target_levels,
         target_level=runtime_cfg.target_level,
     )
     value = out_var.isel(time=runtime_cfg.target_time_idx).sel(
@@ -38,16 +37,6 @@ def target_scalar(
         value = value.isel(batch=0)
     scalar = xarray_jax.unwrap_data(value, require_jax=True)
     return jnp.squeeze(scalar)
-
-
-def _combined_target_scalar(context, runtime_cfg: AnalysisConfig, inputs_data: xarray.Dataset):
-    scalars = [
-        target_scalar(context, runtime_cfg, inputs_data, target_var)
-        for target_var in context.target_vars
-    ]
-    if len(scalars) == 1:
-        return scalars[0]
-    return sum(scalars) / float(len(scalars))
 
 
 def reduce_input_attribution_to_latlon(

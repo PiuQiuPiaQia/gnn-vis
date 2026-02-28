@@ -18,11 +18,9 @@ DATASET_CONFIGS = {
 DATASET_TYPE = "low_res"  # "low_res" | "high_res"
 TARGET_TIME_IDX = 0  # 0(+6h),1(+12h),2(+18h),3(+24h)
 TARGET_VARIABLE = "mean_sea_level_pressure"
-TARGET_VARIABLES = None  # None = 使用 TARGET_VARIABLE；可设为多个目标变量做平均目标
 
 # 若目标变量有 level 维，可在此指定；若无 level 维则忽略。
 TARGET_LEVEL = None
-TARGET_LEVELS = {}
 
 # 扰动设置（用于 Top-K 候选点的干预验证）
 PATCH_RADIUS = 2
@@ -68,4 +66,31 @@ PHYSICS_TOPK_VALUES = [20, 50, 100, 200]
 PHYSICS_PATCH_RADIUS = 2        # 与 PATCH_RADIUS 保持一致
 PHYSICS_PATCH_SCORE_AGG = "mean"
 
+SWE_PLOT_LOG_SCALE = True       # 对 SWE 敏感性热图使用 log10 显示弱信号
+SWE_PLOT_LOG_EPS = 1e-10
+SWE_PLOT_ALPHA_QUANTILE = None  # None = 不做透明掩膜
+SWE_PANEL_ALPHA_QUANTILE = None # 对比面板同样关闭低值透明掩膜
+SWE_PLOT_VMAX_QUANTILE = None   # None = 不做分位数截断
+SWE_PANEL_VMAX_QUANTILE = None
+
 PHYSICS_HEATMAP_DPI = 200
+
+# Physics v2 pipeline configuration
+PHYSICS_PIPELINE_VERSION = "v2"
+
+# SWE model parameters
+SWE_EQ_DEPTH_M = 22.0
+SWE_RAYLEIGH_MOMENTUM_H = 4.0
+SWE_RAYLEIGH_HEIGHT_H = 8.0
+SWE_DIFFUSION_ORDER = 2
+SWE_DIFFUSION_COEFF = 1e4
+SWE_SPONGE_WIDTH = 6
+SWE_SPONGE_EFOLD_H = 1.5
+SWE_USE_DEEP_LAYER_STEERING = True
+SWE_STEERING_ANNULUS_INNER_KM = 300.0
+SWE_STEERING_ANNULUS_OUTER_KM = 900.0
+SWE_STEERING_MIN_ENV_POINTS = 30
+SWE_UPSTREAM_CORE_EXCLUDE_DEG = 0.0
+
+# Forced steering sweep (for advection-dominant gate check)
+SWE_UBAR_SWEEP_MAGS = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
