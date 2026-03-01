@@ -94,3 +94,10 @@ SWE_UPSTREAM_CORE_EXCLUDE_DEG = 0.0
 
 # Forced steering sweep (for advection-dominant gate check)
 SWE_UBAR_SWEEP_MAGS = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
+
+# IG sanity check configuration
+IG_SANITY_ENABLE = True
+IG_SANITY_TOPK = 10
+IG_SANITY_RANDOM_K = 10
+IG_SANITY_SEED = 42
+IG_SANITY_MIN_LIFT_RATIO = 1.1

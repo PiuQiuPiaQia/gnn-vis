@@ -39,6 +39,22 @@ def target_scalar(
     return jnp.squeeze(scalar)
 
 
+def _combined_target_scalar(
+    context: AnalysisContext,
+    runtime_cfg: AnalysisConfig,
+    inputs_data: xarray.Dataset,
+) -> jax.Array:
+    """Return a scalar objective compatible with legacy IG runner usage.
+
+    Prefer multi-target mean when available; otherwise fallback to single target.
+    """
+    if hasattr(context, "target_vars") and getattr(context, "target_vars"):
+        target_vars = list(getattr(context, "target_vars"))
+        vals = [target_scalar(context, runtime_cfg, inputs_data, tv) for tv in target_vars]
+        return jnp.mean(jnp.stack(vals))
+    return target_scalar(context, runtime_cfg, inputs_data, context.target_var)
+
+
 def reduce_input_attribution_to_latlon(
     attribution: np.ndarray,
     original_da: xarray.DataArray,

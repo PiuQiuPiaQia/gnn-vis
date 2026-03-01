@@ -339,7 +339,7 @@ def plot_importance_heatmap_panels(
         panel_alpha = None if panel_alpha_item is None else float(panel_alpha_item)
         panel_cmap = str(cast(Any, cmap_list[i]))
 
-        # 逐面板归一化确保混合方法（如 perturb/IG/ERF）的可读性。
+        # 逐面板归一化确保混合方法（如 perturb/IG）的可读性。
         window = _extract_center_window(data, lat_vals, lon_vals, center_lat, center_lon, panel_window_deg)
         data = _apply_transparency_mask(data, window_ref=window, alpha_quantile=panel_alpha)
         vmin, vmax, norm = _compute_norm(

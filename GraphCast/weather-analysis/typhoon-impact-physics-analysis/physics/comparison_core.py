@@ -431,13 +431,44 @@ def run_physics_comparison() -> Dict[str, Any]:
     gnn_ig_raw = _compute_gnn_ig_for_swe_vars(context, runtime_cfg, baseline_inputs)
     print(f"  GNN IG computed for: {list(gnn_ig_raw.keys())}")
 
+    # Resolve patch parameters early for IG sanity check
+    patch_radius = getattr(cfg, "PHYSICS_PATCH_RADIUS", runtime_cfg.patch_radius)
+    patch_score_agg = getattr(cfg, "PHYSICS_PATCH_SCORE_AGG", runtime_cfg.patch_score_agg)
+
+    # Run IG sanity check if enabled
+    ig_sanity_payload: Dict[str, Any] = {"status": "skipped", "reason": "disabled", "passed": None}
+    sanity_path = RESULTS_DIR / "ig_sanity_metrics.json"
+    if runtime_cfg.ig_sanity_enable:
+        print("\n[Phase 2b] IG Perturbation Sanity Check")
+        from physics.ig_sanity import run_ig_perturb_sanity, write_ig_sanity_report
+        ig_sanity_payload = run_ig_perturb_sanity(
+            context=context,
+            runtime_cfg=runtime_cfg,
+            baseline_inputs=baseline_inputs,
+            gnn_ig_raw=gnn_ig_raw,
+            patch_radius=patch_radius,
+            patch_score_agg=patch_score_agg,
+        )
+        # Write sanity report
+        write_ig_sanity_report(ig_sanity_payload, sanity_path)
+        print(f"  IG sanity status: {ig_sanity_payload.get('status')}")
+        if ig_sanity_payload.get("status") == "ok":
+            print(f"  IG sanity passed: {ig_sanity_payload.get('passed')}")
+            print(f"  Lift ratio: {ig_sanity_payload.get('lift_ratio', float('nan')):.3f}")
+        elif ig_sanity_payload.get("status") == "failed":
+            print(f"  IG sanity reason: {ig_sanity_payload.get('reason')}")
+    else:
+        # Write skipped report for consistent artifact
+        from physics.ig_sanity import write_ig_sanity_report
+        sanity_path.parent.mkdir(parents=True, exist_ok=True)
+        write_ig_sanity_report(ig_sanity_payload, sanity_path)
+
     gnn_ig_maps = _build_gnn_group_maps(gnn_ig_raw, full_lat, full_lon, swe_lat, swe_lon)
     print(f"  Grouped maps: {list(gnn_ig_maps.keys())}")
 
     print("\n[Phase 3] Alignment Metrics")
-    patch_radius = getattr(cfg, "PHYSICS_PATCH_RADIUS", runtime_cfg.patch_radius)
-    patch_agg    = getattr(cfg, "PHYSICS_PATCH_SCORE_AGG", runtime_cfg.patch_score_agg)
-    k_values     = tuple(getattr(cfg, "PHYSICS_TOPK_VALUES", [20, 50, 100, 200]))
+    patch_agg = patch_score_agg  # alias for consistency
+    k_values = tuple(getattr(cfg, "PHYSICS_TOPK_VALUES", [20, 50, 100, 200]))
 
     report = compute_alignment_report(
         swe_result=jax_result,
@@ -493,6 +524,7 @@ def run_physics_comparison() -> Dict[str, Any]:
         "gnn_ig_maps": gnn_ig_maps,
         "report": report,
         "upstream_fraction_series": [float(r["upstream_fraction"]) for r in sweep_rows if np.isfinite(float(r["upstream_fraction"]))],
+        "ig_sanity": ig_sanity_payload,
         "elapsed_sec": elapsed,
     }
 

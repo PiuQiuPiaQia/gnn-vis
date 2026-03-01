@@ -98,4 +98,9 @@ def run_physics_comparison_v2(output_dir: Path | None = None) -> Dict[str, Any]:
     out = dict(result)
     out["gate_result"] = gate_result_to_payload(gate)
     out["gate_report_path"] = str(gate_path)
+    # Pass through ig_sanity payload unchanged
+    out["ig_sanity"] = result.get(
+        "ig_sanity",
+        {"status": "skipped", "reason": "not_available", "passed": None},
+    )
     return out

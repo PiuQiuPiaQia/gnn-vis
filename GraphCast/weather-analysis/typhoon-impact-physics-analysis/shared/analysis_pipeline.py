@@ -37,6 +37,11 @@ class AnalysisConfig:
     dir_path_params: str
     dir_path_dataset: str
     dir_path_stats: str
+    ig_sanity_enable: bool
+    ig_sanity_topk: int
+    ig_sanity_random_k: int
+    ig_sanity_seed: int
+    ig_sanity_min_lift_ratio: float
 
     @classmethod
     def from_module(cls, cfg_module) -> "AnalysisConfig":
@@ -67,6 +72,11 @@ class AnalysisConfig:
             dir_path_params=cfg_module.DIR_PATH_PARAMS,
             dir_path_dataset=cfg_module.DIR_PATH_DATASET,
             dir_path_stats=cfg_module.DIR_PATH_STATS,
+            ig_sanity_enable=bool(getattr(cfg_module, "IG_SANITY_ENABLE", True)),
+            ig_sanity_topk=int(getattr(cfg_module, "IG_SANITY_TOPK", 10)),
+            ig_sanity_random_k=int(getattr(cfg_module, "IG_SANITY_RANDOM_K", 10)),
+            ig_sanity_seed=int(getattr(cfg_module, "IG_SANITY_SEED", 42)),
+            ig_sanity_min_lift_ratio=float(getattr(cfg_module, "IG_SANITY_MIN_LIFT_RATIO", 1.1)),
         )
 
 
@@ -90,14 +100,25 @@ def resolve_spatial_variables(
     perturb_variables: Optional[List[str]],
     eval_inputs,
 ) -> List[str]:
-    """解析用于归因/扰动的输入变量集合。"""
+    """解析用于归因/扰动的输入变量集合。
+    
+    Only includes variables that:
+    - Are present in eval_inputs
+    - Have both 'lat' and 'lon' dimensions
+    """
+    # Get all variables with lat/lon dims
+    spatial_vars = {
+        var_name
+        for var_name, data_array in eval_inputs.data_vars.items()
+        if ("lat" in data_array.dims and "lon" in data_array.dims)
+    }
+    
     if perturb_variables is None:
-        return [
-            var_name
-            for var_name, data_array in eval_inputs.data_vars.items()
-            if ("lat" in data_array.dims and "lon" in data_array.dims)
-        ]
-    return [var_name for var_name in perturb_variables if var_name in eval_inputs.data_vars]
+        # Return all spatial vars that exist in eval_inputs
+        return [var_name for var_name in eval_inputs.data_vars if var_name in spatial_vars]
+    
+    # Return only specified vars that are both in perturb_variables AND have lat/lon dims in eval_inputs
+    return [var_name for var_name in perturb_variables if var_name in eval_inputs.data_vars and var_name in spatial_vars]
 
 
 def select_target_data(outputs, var: str, target_level: Any):

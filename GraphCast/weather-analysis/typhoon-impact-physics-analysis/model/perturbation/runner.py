@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import jax
 import numpy as np
@@ -23,30 +23,83 @@ class CandidatePoint:
     dominant_var: str
 
 
+@dataclass
+class TargetSpec:
+    """Resolved target specification supporting single or multi-target contexts."""
+    target_vars: List[str]
+    base_values: Dict[str, float]
+
+
+def _resolve_target_spec(context: AnalysisContext) -> TargetSpec:
+    """Resolve target specification from context.
+    
+    Supports both:
+    a) context has target_vars/base_values (multi-target)
+    b) single-target context with target_var/base_value
+    
+    Args:
+        context: AnalysisContext with model/data.
+    
+    Returns:
+        TargetSpec with target_vars and base_values.
+    """
+    # Check for multi-target context
+    if hasattr(context, "target_vars") and hasattr(context, "base_values"):
+        target_vars = list(context.target_vars)
+        base_values = dict(context.base_values)
+        return TargetSpec(target_vars=target_vars, base_values=base_values)
+    
+    # Single-target context
+    target_var = getattr(context, "target_var", None)
+    base_value = getattr(context, "base_value", None)
+    
+    if target_var is not None and base_value is not None:
+        return TargetSpec(target_vars=[target_var], base_values={target_var: base_value})
+    
+    # Fallback: try to infer from runtime_cfg if available
+    raise ValueError(
+        "Cannot resolve target specification from context. "
+        "Context must have either (target_vars, base_values) or (target_var, base_value)."
+    )
+
+
 def _select_top_k_candidates(
     candidate_score_da: xarray.DataArray,
     patch_maps_by_var: Dict[str, np.ndarray],
     top_k: int,
     point_ig_score_da: xarray.DataArray,
 ) -> List[CandidatePoint]:
+    # Guard: top_k <= 0 returns empty list
+    if top_k <= 0:
+        return []
+    
     score = np.asarray(candidate_score_da.values)
     point_ig_score = np.asarray(point_ig_score_da.values)
     lat_vals = np.asarray(candidate_score_da.coords["lat"].values)
     lon_vals = np.asarray(candidate_score_da.coords["lon"].values)
     n_lat, n_lon = score.shape
 
-    safe_score = np.where(np.isfinite(score), score, -np.inf)
-    actual_k = max(1, min(int(top_k), safe_score.size))
+    # Only rank finite candidate scores
+    finite_mask = np.isfinite(score)
+    if not np.any(finite_mask):
+        return []
+    
+    safe_score = np.where(finite_mask, score, -np.inf)
+    actual_k = max(1, min(int(top_k), int(np.sum(finite_mask))))
     flat_idx = np.argsort(safe_score.ravel())[::-1][:actual_k]
 
     candidates: List[CandidatePoint] = []
     for rank, idx in enumerate(flat_idx, start=1):
         lat_idx = int(idx // n_lon)
         lon_idx = int(idx % n_lon)
-        dominant_var = max(
-            patch_maps_by_var,
-            key=lambda name: float(patch_maps_by_var[name][lat_idx, lon_idx]),
-        )
+        # Handle empty patch_maps_by_var gracefully
+        if patch_maps_by_var:
+            dominant_var = max(
+                patch_maps_by_var,
+                key=lambda name: float(patch_maps_by_var[name][lat_idx, lon_idx]),
+            )
+        else:
+            dominant_var = "unknown"
         candidates.append(
             CandidatePoint(
                 lat_idx=lat_idx,
@@ -71,6 +124,9 @@ def _evaluate_candidates_with_perturbation(
     patch_radius: int,
 ) -> List[Dict[str, Any]]:
     time_sel = slice(None) if runtime_cfg.perturb_time == "all" else int(runtime_cfg.perturb_time)
+    
+    # Resolve target specification from context
+    target_spec = _resolve_target_spec(context)
 
     print(f"\n[Perturb] Evaluating {len(candidates)} IG candidates...")
     rows: List[Dict[str, Any]] = []
@@ -100,11 +156,10 @@ def _evaluate_candidates_with_perturbation(
             )
 
             delta_by_target: Dict[str, float] = {}
-            for target_var in context.target_vars:
+            for target_var in target_spec.target_vars:
                 out_var = select_target_data(
                     outputs,
                     target_var,
-                    target_levels=runtime_cfg.target_levels,
                     target_level=runtime_cfg.target_level,
                 )
                 new_value = out_var.isel(time=runtime_cfg.target_time_idx).sel(
@@ -112,7 +167,7 @@ def _evaluate_candidates_with_perturbation(
                     lon=context.center_lon,
                     method="nearest",
                 ).values.item()
-                delta_by_target[target_var] = float(new_value - context.base_values[target_var])
+                delta_by_target[target_var] = float(new_value - target_spec.base_values[target_var])
 
             delta_values = np.array(list(delta_by_target.values()), dtype=np.float64)
             rows.append(
