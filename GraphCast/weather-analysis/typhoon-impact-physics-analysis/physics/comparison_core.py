@@ -19,7 +19,6 @@ from physics.alignment import (
     compute_alignment_report,
     plot_alignment_scatter,
     plot_comparison_panels,
-    plot_sensitivity_heatmaps,
     plot_topk_iou_curves,
     save_report_json,
 )
@@ -481,24 +480,8 @@ def run_physics_comparison() -> Dict[str, Any]:
 
     print("\n[Phase 4] Saving Visualizations")
     dpi = getattr(cfg, "PHYSICS_HEATMAP_DPI", runtime_cfg.heatmap_dpi)
-    swe_plot_log_scale = bool(getattr(cfg, "SWE_PLOT_LOG_SCALE", True))
-    swe_plot_log_eps = float(getattr(cfg, "SWE_PLOT_LOG_EPS", 1e-10))
-    swe_plot_alpha_q = getattr(cfg, "SWE_PLOT_ALPHA_QUANTILE", None)
-    swe_plot_vmax_q = getattr(cfg, "SWE_PLOT_VMAX_QUANTILE", None)
     panel_alpha_q = getattr(cfg, "SWE_PANEL_ALPHA_QUANTILE", None)
     panel_vmax_q = getattr(cfg, "SWE_PANEL_VMAX_QUANTILE", None)
-
-    suffix = f"core{core_radius_deg:g}".replace(".", "p") if core_radius_deg > 0.0 else ""
-    plot_sensitivity_heatmaps(
-        jax_result,
-        RESULTS_DIR,
-        dpi=dpi,
-        name_suffix=suffix,
-        log_scale=swe_plot_log_scale,
-        log_eps=swe_plot_log_eps,
-        alpha_quantile=swe_plot_alpha_q,
-        vmax_quantile=swe_plot_vmax_q,
-    )
     plot_comparison_panels(
         jax_result,
         gnn_ig_maps,

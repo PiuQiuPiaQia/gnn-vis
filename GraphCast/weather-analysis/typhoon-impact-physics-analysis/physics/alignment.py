@@ -18,8 +18,6 @@ class GroupMetrics:
     group_name: str
     spearman_rho: float
     spearman_pval: float
-    kendall_tau: float
-    kendall_pval: float
     topk_iou: Dict[int, float]
     n_valid: int
 
@@ -35,14 +33,18 @@ class AlignmentReport:
 
     def as_dict(self) -> dict:
         return {
-            "_comment": "SWE physical sensitivity and GNN IG alignment metrics.",
+            "_comment": "SWE 物理敏感度与 GNN IG 对齐指标。",
             "_field_notes": {
-                "target_time_idx": "Forecast lead index. 0 means +6h, 1 means +12h, etc.",
-                "lead_time_h": "Forecast lead time in hours.",
-                "patch_radius": "Radius used for local patch aggregation before metrics.",
-                "patch_score_agg": "Aggregation method for patch scoring.",
-                "sigma_deg": "Gaussian target width (degrees) used in sensitivity objective.",
-                "groups": "Per-variable-group alignment metrics (h and uv).",
+                "target_time_idx": "预报时效索引。0 表示 +6h，1 表示 +12h，以此类推。",
+                "lead_time_h": "预报时效（小时）。",
+                "patch_radius": "计算指标前进行局部 patch 聚合时使用的半径。",
+                "patch_score_agg": "patch 聚合方式（如 mean）。",
+                "sigma_deg": "敏感度目标函数中高斯权重的宽度（度）。",
+                "groups": "按变量组统计的对齐指标（h 与 uv）。",
+                "spearman_rho": "Spearman 秩相关系数，越接近 1 表示排序一致性越高。",
+                "spearman_pval": "Spearman 检验 p 值，越小表示相关性越显著。",
+                "topk_iou": "Top-K 热点集合的交并比（IoU），越大表示热点重叠越高。",
+                "n_valid": "参与统计的有效样本数量（有限值网格点数）。",
             },
             "target_time_idx": self.target_time_idx,
             "lead_time_h": self.lead_time_h,
@@ -51,13 +53,11 @@ class AlignmentReport:
             "sigma_deg": self.sigma_deg,
             "groups": {
                 g.group_name: {
-                    "_comment": "Rank/overlap consistency between SWE map and GNN IG map.",
+                    "_comment": "SWE 敏感度图与 GNN IG 图在排序与热点重叠上的一致性。",
                     "spearman_rho": round(g.spearman_rho, 4),
                     "spearman_pval": float(f"{g.spearman_pval:.2e}"),
-                    "kendall_tau": round(g.kendall_tau, 4),
-                    "kendall_pval": float(f"{g.kendall_pval:.2e}"),
                     "topk_iou": {f"k{k}": round(v, 4) for k, v in g.topk_iou.items()},
-                    "_topk_iou_note": "IoU of top-K hotspots between SWE and GNN maps.",
+                    "_topk_iou_note": "SWE 与 GNN 两张图在 Top-K 热点上的 IoU（交并比）。",
                     "n_valid": g.n_valid,
                 }
                 for g in self.groups
@@ -88,22 +88,6 @@ def compute_spearman(
         return np.nan, np.nan
     sr: Any = scipy.stats.spearmanr(s, g)
     return float(sr[0]), float(sr[1])
-
-
-def compute_kendall(
-    swe_map: np.ndarray,
-    gnn_map: np.ndarray,
-    patch_radius: int = 2,
-    patch_score_agg: str = "mean",
-) -> Tuple[float, float]:
-    s, g = _safe_finite_pair(
-        _patch(swe_map, patch_radius, patch_score_agg),
-        _patch(gnn_map, patch_radius, patch_score_agg),
-    )
-    if len(s) < 5:
-        return np.nan, np.nan
-    kt: Any = scipy.stats.kendalltau(s, g)
-    return float(kt[0]), float(kt[1])
 
 
 def compute_topk_iou(
@@ -149,7 +133,6 @@ def _group_metrics(
     k_values: Tuple[int, ...] = (20, 50, 100, 200),
 ) -> GroupMetrics:
     rho, rpval = compute_spearman(swe_map, gnn_map, patch_radius, patch_score_agg)
-    tau, tpval = compute_kendall(swe_map, gnn_map, patch_radius, patch_score_agg)
     iou = compute_topk_iou(swe_map, gnn_map, k_values, patch_radius, patch_score_agg)
     s, _ = _safe_finite_pair(
         _patch(swe_map, patch_radius, patch_score_agg),
@@ -159,8 +142,6 @@ def _group_metrics(
         group_name=group_name,
         spearman_rho=rho,
         spearman_pval=rpval,
-        kendall_tau=tau,
-        kendall_pval=tpval,
         topk_iou=iou,
         n_valid=len(s),
     )
@@ -194,8 +175,7 @@ def compute_alignment_report(
                            group_name, patch_radius, patch_score_agg, k_values)
         report.groups.append(m)
         print(f"  [Align] {group_name:6s}: ρ={m.spearman_rho:+.3f}  "
-              f"τ={m.kendall_tau:+.3f}  IoU@50={m.topk_iou.get(50, float('nan')):.3f}  "
-              f"n={m.n_valid}")
+              f"IoU@50={m.topk_iou.get(50, float('nan')):.3f}  n={m.n_valid}")
 
     return report
 
