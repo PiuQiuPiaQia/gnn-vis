@@ -12,28 +12,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Unified entry for typhoon impact physics analysis",
     )
-    subparsers = parser.add_subparsers(dest="command")
-
-    subparsers.add_parser(
-        "compare",
-        help="Run model receptive-field / physics comparison",
-    )
-
-    parser.set_defaults(command="compare")
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
-
-    if args.command == "compare":
-        from physics.comparison import run_physics_comparison_v2
-        run_physics_comparison_v2()
-        return 0
-
-    parser.error(f"unsupported command: {args.command}")
-    return 2
+    parser.parse_args(argv)
+    from physics.comparison import run_physics_comparison_v2
+    run_physics_comparison_v2()
+    return 0
 
 
 if __name__ == "__main__":

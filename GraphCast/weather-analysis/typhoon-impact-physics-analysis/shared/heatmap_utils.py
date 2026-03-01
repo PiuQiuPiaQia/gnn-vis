@@ -60,6 +60,101 @@ def _safe_abs_quantile(x: np.ndarray, q: float) -> float:
     return val
 
 
+def _finite_positive_values(data: np.ndarray) -> np.ndarray:
+    vals = _finite_values(data)
+    if vals.size == 0:
+        return vals
+    return vals[vals > 0.0]
+
+
+def _safe_nonnegative_quantile(data: np.ndarray, q: float) -> float:
+    vals = _finite_values(np.maximum(np.asarray(data, dtype=np.float64), 0.0))
+    if vals.size == 0:
+        return 0.0
+    return float(np.quantile(vals, q))
+
+
+def prepare_shared_nonnegative_display(
+    swe_map: np.ndarray,
+    ig_map: np.ndarray,
+    *,
+    norm_quantile: float = 0.99,
+    transform: str = "asinh",
+    asinh_scale_quantile: float = 0.90,
+    log_eps_quantile: float = 0.01,
+) -> dict:
+    """Build shared-scale display maps for non-negative SWE/IG comparisons.
+
+    Returns transformed maps plus shared color limits so SWE and IG panels can
+    use exactly the same color norm per channel.
+    """
+    q = float(np.clip(norm_quantile, 0.0, 1.0))
+    swe = np.maximum(np.asarray(swe_map, dtype=np.float64), 0.0)
+    ig = np.maximum(np.asarray(ig_map, dtype=np.float64), 0.0)
+
+    swe_q = _safe_nonnegative_quantile(swe, q)
+    ig_q = _safe_nonnegative_quantile(ig, q)
+    shared_raw_vmax = max(swe_q, ig_q, 1e-12)
+
+    transform_key = str(transform).lower().strip()
+    if transform_key not in {"linear", "asinh", "log"}:
+        raise ValueError(f"unsupported display transform: {transform}")
+
+    pos = np.concatenate([_finite_positive_values(swe), _finite_positive_values(ig)])
+    if transform_key == "asinh":
+        if pos.size == 0:
+            scale = 1.0
+        else:
+            q_scale = float(np.clip(asinh_scale_quantile, 0.0, 1.0))
+            scale = float(np.quantile(pos, q_scale))
+            if (not np.isfinite(scale)) or scale <= 0.0:
+                scale = float(np.max(pos))
+            if (not np.isfinite(scale)) or scale <= 0.0:
+                scale = 1.0
+        swe_show = np.arcsinh(swe / scale)
+        ig_show = np.arcsinh(ig / scale)
+        shared_vmin = 0.0
+        shared_vmax = float(np.arcsinh(shared_raw_vmax / scale))
+        transform_label = f"asinh(x/{scale:.3g})"
+    elif transform_key == "log":
+        if pos.size == 0:
+            eps = 1e-12
+        else:
+            q_eps = float(np.clip(log_eps_quantile, 0.0, 1.0))
+            eps = float(np.quantile(pos, q_eps))
+            if (not np.isfinite(eps)) or eps <= 0.0:
+                eps = max(float(np.min(pos)), 1e-12)
+        swe_show = np.log10(swe + eps)
+        ig_show = np.log10(ig + eps)
+        shared_vmin = float(np.log10(eps))
+        shared_vmax = float(np.log10(shared_raw_vmax + eps))
+        transform_label = f"log10(x+{eps:.3g})"
+    else:
+        swe_show = swe
+        ig_show = ig
+        shared_vmin = 0.0
+        shared_vmax = float(shared_raw_vmax)
+        transform_label = "linear"
+
+    if shared_vmax <= shared_vmin:
+        shared_vmax = shared_vmin + 1e-12
+
+    denom = shared_raw_vmax + 1e-12
+    swe_norm = np.clip(swe / denom, 0.0, 1.0)
+    ig_norm = np.clip(ig / denom, 0.0, 1.0)
+
+    return {
+        "swe_show": swe_show,
+        "ig_show": ig_show,
+        "swe_norm": swe_norm,
+        "ig_norm": ig_norm,
+        "shared_raw_vmax": float(shared_raw_vmax),
+        "shared_vmin": float(shared_vmin),
+        "shared_vmax": float(shared_vmax),
+        "transform_label": transform_label,
+    }
+
+
 def _compute_norm(
     data: np.ndarray,
     vmax_quantile: Optional[float],
@@ -303,6 +398,8 @@ def plot_importance_heatmap_panels(
     center_window_deg: Union[float, Sequence[float]] = 10.0,
     center_s_quantile: Union[float, Sequence[float]] = 0.99,
     alpha_quantile: Union[Optional[float], Sequence[Optional[float]]] = None,
+    fixed_vmin: Union[Optional[float], Sequence[Optional[float]]] = None,
+    fixed_vmax: Union[Optional[float], Sequence[Optional[float]]] = None,
 ) -> None:
     """渲染一个或多个并排重要性面板，每个面板独立样式。"""
     if not importance_list:
@@ -318,6 +415,8 @@ def plot_importance_heatmap_panels(
     center_window_deg_list = _expand_param(center_window_deg, n_panel, "center_window_deg")
     center_s_quantile_list = _expand_param(center_s_quantile, n_panel, "center_s_quantile")
     alpha_quantile_list = _expand_param(alpha_quantile, n_panel, "alpha_quantile")
+    fixed_vmin_list = _expand_param(fixed_vmin, n_panel, "fixed_vmin")
+    fixed_vmax_list = _expand_param(fixed_vmax, n_panel, "fixed_vmax")
 
     fig, axes = plt.subplots(1, n_panel, figsize=(7 * n_panel, 6), dpi=dpi)
     if n_panel == 1:
@@ -338,17 +437,31 @@ def plot_importance_heatmap_panels(
         panel_alpha_item = cast(Any, alpha_quantile_list[i])
         panel_alpha = None if panel_alpha_item is None else float(panel_alpha_item)
         panel_cmap = str(cast(Any, cmap_list[i]))
+        fixed_vmin_item = cast(Any, fixed_vmin_list[i])
+        fixed_vmax_item = cast(Any, fixed_vmax_list[i])
+        panel_fixed_vmin = None if fixed_vmin_item is None else float(fixed_vmin_item)
+        panel_fixed_vmax = None if fixed_vmax_item is None else float(fixed_vmax_item)
 
         # 逐面板归一化确保混合方法（如 perturb/IG）的可读性。
         window = _extract_center_window(data, lat_vals, lon_vals, center_lat, center_lon, panel_window_deg)
         data = _apply_transparency_mask(data, window_ref=window, alpha_quantile=panel_alpha)
-        vmin, vmax, norm = _compute_norm(
-            np.asarray(data),
-            vq,
-            is_diverging,
-            center_window=window,
-            center_s_quantile=panel_s_quantile,
-        )
+        if panel_fixed_vmin is not None and panel_fixed_vmax is not None:
+            vmin = panel_fixed_vmin
+            vmax = panel_fixed_vmax
+            if is_diverging:
+                from matplotlib.colors import TwoSlopeNorm
+
+                norm = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax)
+            else:
+                norm = None
+        else:
+            vmin, vmax, norm = _compute_norm(
+                np.asarray(data),
+                vq,
+                is_diverging,
+                center_window=window,
+                center_s_quantile=panel_s_quantile,
+            )
         lat_asc = lat_vals[0] < lat_vals[-1]
         origin = "lower" if lat_asc else "upper"
 

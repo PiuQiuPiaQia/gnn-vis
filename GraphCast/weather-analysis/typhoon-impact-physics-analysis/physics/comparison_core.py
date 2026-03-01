@@ -18,7 +18,7 @@ from shared.baseline import _build_climatology_baseline_inputs
 from physics.alignment import (
     compute_alignment_report,
     plot_alignment_scatter,
-    plot_comparison_panels,
+    plot_topk_overlap_maps,
     plot_topk_iou_curves,
     save_report_json,
 )
@@ -480,15 +480,15 @@ def run_physics_comparison() -> Dict[str, Any]:
 
     print("\n[Phase 4] Saving Visualizations")
     dpi = getattr(cfg, "PHYSICS_HEATMAP_DPI", runtime_cfg.heatmap_dpi)
-    panel_alpha_q = getattr(cfg, "SWE_PANEL_ALPHA_QUANTILE", None)
-    panel_vmax_q = getattr(cfg, "SWE_PANEL_VMAX_QUANTILE", None)
-    plot_comparison_panels(
+    panel_topk_overlap_k = int(getattr(cfg, "SWE_PANEL_TOPK_OVERLAP_K", 50))
+    plot_topk_overlap_maps(
         jax_result,
         gnn_ig_maps,
         RESULTS_DIR,
         dpi=dpi,
-        alpha_quantile=panel_alpha_q,
-        vmax_quantile=panel_vmax_q,
+        patch_radius=patch_radius,
+        patch_score_agg=patch_agg,
+        topk_overlap_k=panel_topk_overlap_k,
     )
     plot_alignment_scatter(jax_result, gnn_ig_maps, report, RESULTS_DIR,
                            patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi)

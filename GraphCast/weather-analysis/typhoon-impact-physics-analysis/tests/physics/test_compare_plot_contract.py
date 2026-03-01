@@ -38,6 +38,12 @@ class ComparePlotContractTest(unittest.TestCase):
         called = _called_function_names_from_source("run_physics_comparison")
         self.assertNotIn("plot_sensitivity_heatmaps", called)
 
+    def test_compare_pipeline_uses_topk_overlap_only_not_rank_panels(self):
+        """compare 输出应移除 rank/rank-comparison 面板，仅保留 Top-K 相关图。"""
+        called = _called_function_names_from_source("run_physics_comparison")
+        self.assertIn("plot_topk_overlap_maps", called)
+        self.assertNotIn("plot_comparison_panels", called)
+
 
 if __name__ == "__main__":
     unittest.main()

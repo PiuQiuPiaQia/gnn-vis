@@ -74,6 +74,34 @@ def _safe_finite_pair(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndar
     return a[mask].ravel(), b[mask].ravel()
 
 
+def _topk_mask_from_rank(rank_map: np.ndarray, k: int) -> Tuple[np.ndarray, int]:
+    rank = np.asarray(rank_map, dtype=np.float64)
+    flat = rank.ravel()
+    finite_idx = np.flatnonzero(np.isfinite(flat))
+    if finite_idx.size == 0:
+        return np.zeros(rank.shape, dtype=bool), 0
+    actual_k = max(1, min(int(k), int(finite_idx.size)))
+    vals = flat[finite_idx]
+    top_local = np.argpartition(vals, -actual_k)[-actual_k:]
+    top_idx = finite_idx[top_local]
+    mask = np.zeros(flat.shape, dtype=bool)
+    mask[top_idx] = True
+    return mask.reshape(rank.shape), actual_k
+
+
+def _topk_overlap_code(swe_score: np.ndarray, ig_score: np.ndarray, k: int) -> Tuple[np.ndarray, int]:
+    """Encode overlap map: 0 none, 1 SWE-only, 2 IG-only, 3 overlap."""
+    swe_mask, actual_k = _topk_mask_from_rank(swe_score, k)
+    ig_mask, actual_k_ig = _topk_mask_from_rank(ig_score, k)
+    actual_k = min(actual_k, actual_k_ig)
+
+    code = np.zeros(swe_mask.shape, dtype=np.int8)
+    code[swe_mask & (~ig_mask)] = 1
+    code[(~swe_mask) & ig_mask] = 2
+    code[swe_mask & ig_mask] = 3
+    return code, actual_k
+
+
 def compute_spearman(
     swe_map: np.ndarray,
     gnn_map: np.ndarray,
@@ -180,56 +208,67 @@ def compute_alignment_report(
     return report
 
 
-def plot_comparison_panels(
+def plot_topk_overlap_maps(
     swe_result: SWESensitivityResult,
     gnn_ig_maps: Dict[str, np.ndarray],
     output_dir: Path,
     dpi: int = 200,
-    alpha_quantile: Optional[float] = None,
-    vmax_quantile: Optional[float] = None,
+    patch_radius: int = 2,
+    patch_score_agg: str = "mean",
+    topk_overlap_k: int = 50,
 ) -> None:
-    from shared.heatmap_utils import plot_importance_heatmap_panels
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.patches import Patch
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    lat, lon = swe_result.lat_vals, swe_result.lon_vals
+    lat = np.asarray(swe_result.lat_vals, dtype=np.float64)
+    lon = np.asarray(swe_result.lon_vals, dtype=np.float64)
     lead_h = (swe_result.target_time_idx + 1) * 6
+    lat_asc = lat[0] < lat[-1]
+    origin = "lower" if lat_asc else "upper"
+    extent = (lon.min(), lon.max(), lat.min(), lat.max())
 
     groups = [
-        ("h",     swe_result.S_h,     "z_500",  "SWE $S_h$",    "GNN IG (z₅₀₀)",    "|∂J/∂h₀|"),
-        ("uv",    swe_result.S_uv,    "uv_500", "SWE $S_{uv}$", "GNN IG (uv magnitude)", "|∂J/∂(u,v)₀|"),
+        ("h", swe_result.S_h, "z_500"),
+        ("uv", swe_result.S_uv, "uv_500"),
     ]
 
-    def _norm_q(x: np.ndarray) -> np.ndarray:
-        fin = x[np.isfinite(x)]
-        vmax = float(np.max(fin)) if fin.size > 0 else 1.0
-        return np.clip(x / (vmax + 1e-12), 0.0, 1.0)
-
-    for group_tag, swe_arr, gnn_key, swe_title, gnn_title, cbar_swe in groups:
+    for group_tag, swe_arr, gnn_key in groups:
         if gnn_key not in gnn_ig_maps:
             continue
-        gnn_arr = gnn_ig_maps[gnn_key]
-        diff = _norm_q(swe_arr) - _norm_q(gnn_arr)
-
-        maps = [
-            xarray.DataArray(swe_arr, dims=("lat", "lon"), coords={"lat": lat, "lon": lon}),
-            xarray.DataArray(gnn_arr, dims=("lat", "lon"), coords={"lat": lat, "lon": lon}),
-            xarray.DataArray(diff,    dims=("lat", "lon"), coords={"lat": lat, "lon": lon}),
-        ]
-        out = output_dir / f"physics_gnn_comparison_{group_tag}_t{swe_result.target_time_idx}.png"
-        plot_importance_heatmap_panels(
-            importance_list=maps,
-            titles=[swe_title, gnn_title, f"SWE − GNN (norm.) +{lead_h}h"],
-            center_lat=swe_result.center_lat,
-            center_lon=swe_result.center_lon,
-            output_path=out,
-            cmap=["magma", "Blues", "RdBu_r"],
-            dpi=dpi,
-            vmax_quantile=[vmax_quantile, vmax_quantile, None],
-            diverging=[False, False, True],
-            cbar_label=[cbar_swe, "GNN IG score", "Δ (normalized)"],
-            alpha_quantile=[alpha_quantile, alpha_quantile, None],
+        gnn_arr = _patch(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
+        overlap_code, actual_k = _topk_overlap_code(swe_arr, gnn_arr, topk_overlap_k)
+        fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
+        cmap = ListedColormap(["#f2f2f2", "#ff7f0e", "#1f77b4", "#2ca02c"])
+        norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap.N)
+        ax.imshow(
+            overlap_code,
+            extent=(lon.min(), lon.max(), lat.min(), lat.max()),
+            origin=origin,
+            cmap=cmap,
+            norm=norm,
+            aspect="auto",
         )
-        print(f"Saved: {out}")
+        ax.scatter([swe_result.center_lon], [swe_result.center_lat], c="#00e5ff", marker="x", s=80, linewidths=2)
+        ax.set_xlabel("Longitude")
+        ax.set_ylabel("Latitude")
+        ax.set_title(f"Top-{actual_k} overlap ({group_tag}) — +{lead_h}h")
+        ax.legend(
+            handles=[
+                Patch(facecolor="#2ca02c", edgecolor="none", label="Overlap"),
+                Patch(facecolor="#ff7f0e", edgecolor="none", label="SWE only"),
+                Patch(facecolor="#1f77b4", edgecolor="none", label="IG only"),
+            ],
+            loc="upper right",
+            fontsize=9,
+            framealpha=0.9,
+        )
+        fig.tight_layout()
+        out_overlap = output_dir / f"physics_topk_overlap_{group_tag}_k{actual_k}_t{swe_result.target_time_idx}.png"
+        fig.savefig(out_overlap)
+        plt.close(fig)
+        print(f"Saved: {out_overlap}")
 
 
 def plot_sensitivity_heatmaps(

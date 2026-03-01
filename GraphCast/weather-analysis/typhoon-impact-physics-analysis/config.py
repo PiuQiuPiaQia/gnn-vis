@@ -69,9 +69,11 @@ PHYSICS_PATCH_SCORE_AGG = "mean"
 SWE_PLOT_LOG_SCALE = True       # 对 SWE 敏感性热图使用 log10 显示弱信号
 SWE_PLOT_LOG_EPS = 1e-10
 SWE_PLOT_ALPHA_QUANTILE = None  # None = 不做透明掩膜
-SWE_PANEL_ALPHA_QUANTILE = None # 对比面板同样关闭低值透明掩膜
 SWE_PLOT_VMAX_QUANTILE = None   # None = 不做分位数截断
-SWE_PANEL_VMAX_QUANTILE = None
+
+# Compare 面板：分位数排名图 + TopK 重叠
+SWE_PANEL_RANK_MASK_QUANTILE = 0.90         # 仅显示 rank 前 10%
+SWE_PANEL_TOPK_OVERLAP_K = 50               # Top-K 重叠图阈值
 
 PHYSICS_HEATMAP_DPI = 200
 
