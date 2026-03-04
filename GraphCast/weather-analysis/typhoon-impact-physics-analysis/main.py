@@ -18,7 +18,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = _build_parser()
     parser.parse_args(argv)
-    from physics.comparison import run_physics_comparison_v2
+    from physics.swe.comparison import run_physics_comparison_v2
     run_physics_comparison_v2()
     return 0
 

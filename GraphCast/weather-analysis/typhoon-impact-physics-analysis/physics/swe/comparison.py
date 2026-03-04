@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 def run_physics_comparison_v2(output_dir: Path | None = None) -> Dict[str, Any]:
     """Compatibility wrapper for comparison pipeline results."""
-    from physics.comparison_core import run_physics_comparison
+    from physics.swe.comparison_core import run_physics_comparison
 
     result = run_physics_comparison()
 

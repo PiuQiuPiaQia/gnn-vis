@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""physics - SWE physics-based sensitivity analysis pipeline."""
+"""physics package with SWE and DLMSF-track organization."""
 from __future__ import annotations
 
 __version__ = "0.1.0"

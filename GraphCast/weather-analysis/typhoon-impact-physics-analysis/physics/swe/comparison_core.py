@@ -15,21 +15,21 @@ from shared.analysis_pipeline import AnalysisConfig, build_analysis_context
 from shared.importance_common import reduce_input_attribution_to_latlon, target_scalar
 from shared.model_utils import load_normalization_stats
 from shared.baseline import _build_climatology_baseline_inputs
-from physics.alignment import (
+from physics.swe.alignment import (
     compute_alignment_report,
     plot_alignment_scatter,
     plot_topk_overlap_maps,
     plot_topk_iou_curves,
     save_report_json,
 )
-from physics.swe_sensitivity import (
+from physics.swe.swe_sensitivity import (
     compute_sensitivity_jax,
     extract_swe_initial_conditions,
 )
-from physics.metrics import compute_anisotropy_ratio_km, compute_upstream_fraction
-from physics.steering import compute_deep_layer_environmental_steering
+from physics.swe.metrics import compute_anisotropy_ratio_km, compute_upstream_fraction
+from physics.swe.steering import compute_deep_layer_environmental_steering
 
-ROOT_DIR = Path(__file__).parent.parent if "__file__" in globals() else Path.cwd()
+ROOT_DIR = Path(__file__).resolve().parents[2] if "__file__" in globals() else Path.cwd()
 RESULTS_DIR = ROOT_DIR / "validation_results"
 
 _SWE_COMPARABLE_VARS = [
@@ -439,7 +439,7 @@ def run_physics_comparison() -> Dict[str, Any]:
     sanity_path = RESULTS_DIR / "ig_sanity_metrics.json"
     if runtime_cfg.ig_sanity_enable:
         print("\n[Phase 2b] IG Perturbation Sanity Check")
-        from physics.ig_sanity import run_ig_perturb_sanity, write_ig_sanity_report
+        from physics.swe.ig_sanity import run_ig_perturb_sanity, write_ig_sanity_report
         ig_sanity_payload = run_ig_perturb_sanity(
             context=context,
             runtime_cfg=runtime_cfg,
@@ -458,7 +458,7 @@ def run_physics_comparison() -> Dict[str, Any]:
             print(f"  IG sanity reason: {ig_sanity_payload.get('reason')}")
     else:
         # Write skipped report for consistent artifact
-        from physics.ig_sanity import write_ig_sanity_report
+        from physics.swe.ig_sanity import write_ig_sanity_report
         sanity_path.parent.mkdir(parents=True, exist_ok=True)
         write_ig_sanity_report(ig_sanity_payload, sanity_path)
 

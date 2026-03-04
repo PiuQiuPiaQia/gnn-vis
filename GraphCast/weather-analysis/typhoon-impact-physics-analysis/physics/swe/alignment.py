@@ -10,7 +10,7 @@ import scipy.stats
 import xarray
 
 from shared.patch_scoring_utils import window_reduce_2d
-from physics.swe_sensitivity import SWESensitivityResult
+from physics.swe.swe_sensitivity import SWESensitivityResult
 
 
 @dataclass

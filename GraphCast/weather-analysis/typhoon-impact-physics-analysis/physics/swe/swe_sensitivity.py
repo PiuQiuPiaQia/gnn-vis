@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import xarray
 
-from physics.swe_model import (
+from physics.swe.swe_model import (
     SWEPhysicsConfig,
     make_gaussian_weights,
     make_physics_config,
@@ -217,7 +217,7 @@ def compute_sensitivity_jax(
         )
 
     elif constraint_mode == "geostrophic_hard":
-        from physics.swe_model import geostrophic_wind_from_height
+        from physics.swe.swe_model import geostrophic_wind_from_height
 
         cfg = make_physics_config(
             lat_vals,

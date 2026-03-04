@@ -9,7 +9,7 @@ import xarray as xr
 from pathlib import Path
 from types import SimpleNamespace
 
-from physics.ig_sanity import (
+from physics.swe.ig_sanity import (
     sample_random_grid_indices,
     build_point_score_da,
     compute_sanity_summary,

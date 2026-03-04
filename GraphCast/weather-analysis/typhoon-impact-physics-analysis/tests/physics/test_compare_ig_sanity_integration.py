@@ -16,7 +16,7 @@ class TestSkippedPayloadContract:
 
     def test_skipped_payload_has_required_keys(self):
         """Skipped payload must have status, reason, passed=None."""
-        from physics.ig_sanity import run_ig_perturb_sanity
+        from physics.swe.ig_sanity import run_ig_perturb_sanity
         
         # Create minimal mock context and config
         mock_context = MagicMock()
@@ -38,7 +38,7 @@ class TestSkippedPayloadContract:
 
     def test_failed_payload_includes_reason(self):
         """Failed payload must include reason key."""
-        from physics.ig_sanity import run_ig_perturb_sanity, compute_sanity_summary
+        from physics.swe.ig_sanity import run_ig_perturb_sanity, compute_sanity_summary
         
         # Verify compute_sanity_summary returns reason on failure
         result = compute_sanity_summary(
@@ -56,7 +56,7 @@ class TestWriteIgSanityReportSanitization:
 
     def test_sanitizes_nan_to_null_in_json(self, tmp_path: Path):
         """write_ig_sanity_report must sanitize NaN to null in JSON output."""
-        from physics.ig_sanity import write_ig_sanity_report
+        from physics.swe.ig_sanity import write_ig_sanity_report
         
         payload = {
             "status": "ok",
@@ -76,7 +76,7 @@ class TestWriteIgSanityReportSanitization:
 
     def test_sanitizes_inf_to_null_in_json(self, tmp_path: Path):
         """write_ig_sanity_report must sanitize Inf/-Inf to null in JSON output."""
-        from physics.ig_sanity import write_ig_sanity_report
+        from physics.swe.ig_sanity import write_ig_sanity_report
         
         payload = {
             "status": "ok",
@@ -93,7 +93,7 @@ class TestWriteIgSanityReportSanitization:
 
     def test_json_uses_allow_nan_false(self, tmp_path: Path):
         """JSON output should not contain raw NaN/Inf (would fail with allow_nan=False)."""
-        from physics.ig_sanity import write_ig_sanity_report
+        from physics.swe.ig_sanity import write_ig_sanity_report
         
         payload = {
             "status": "ok",
@@ -144,7 +144,7 @@ class TestComparisonCoreIgSanityPassthrough:
 
     def test_comparison_core_disabled_ig_sanity_writes_skipped_report(self, tmp_path: Path):
         """When ig_sanity_enable=False, should still write skipped report."""
-        from physics.ig_sanity import write_ig_sanity_report
+        from physics.swe.ig_sanity import write_ig_sanity_report
         
         # Verify the skipped payload is written correctly
         skipped_payload = {"status": "skipped", "reason": "disabled", "passed": None}
@@ -164,7 +164,7 @@ class TestComputeSanitySummaryStrictBehavior:
 
     def test_fails_on_empty_topk_list(self):
         """Should fail with reason='empty_inputs' when topk_deltas empty."""
-        from physics.ig_sanity import compute_sanity_summary
+        from physics.swe.ig_sanity import compute_sanity_summary
         
         result = compute_sanity_summary(
             topk_deltas=[],
@@ -176,7 +176,7 @@ class TestComputeSanitySummaryStrictBehavior:
 
     def test_fails_on_empty_rand_list(self):
         """Should fail with reason='empty_inputs' when rand_deltas empty."""
-        from physics.ig_sanity import compute_sanity_summary
+        from physics.swe.ig_sanity import compute_sanity_summary
         
         result = compute_sanity_summary(
             topk_deltas=[1.0, 2.0],
@@ -188,7 +188,7 @@ class TestComputeSanitySummaryStrictBehavior:
 
     def test_fails_on_non_finite_in_topk(self):
         """Should fail with reason='non_finite_input' when topk has NaN/Inf."""
-        from physics.ig_sanity import compute_sanity_summary
+        from physics.swe.ig_sanity import compute_sanity_summary
         
         result = compute_sanity_summary(
             topk_deltas=[1.0, float("nan")],
@@ -200,7 +200,7 @@ class TestComputeSanitySummaryStrictBehavior:
 
     def test_fails_on_non_finite_in_rand(self):
         """Should fail with reason='non_finite_input' when rand has NaN/Inf."""
-        from physics.ig_sanity import compute_sanity_summary
+        from physics.swe.ig_sanity import compute_sanity_summary
         
         result = compute_sanity_summary(
             topk_deltas=[1.0, 2.0],
@@ -212,7 +212,7 @@ class TestComputeSanitySummaryStrictBehavior:
 
     def test_pass_rule_requires_topk_greater_than_rand(self):
         """Pass rule: topk_mean > rand_mean AND lift_ratio >= min_lift_ratio."""
-        from physics.ig_sanity import compute_sanity_summary
+        from physics.swe.ig_sanity import compute_sanity_summary
         
         # topk=1.5, rand=1.0, lift_ratio=1.5
         # With min_lift_ratio=1.1, this should pass
@@ -245,7 +245,7 @@ class TestBuildPointScoreDaStrictBehavior:
 
     def test_raises_value_error_on_shape_mismatch(self):
         """Should raise ValueError listing var names with mismatched shapes."""
-        from physics.ig_sanity import build_point_score_da
+        from physics.swe.ig_sanity import build_point_score_da
         
         lat_vals = np.array([0.0, 1.0, 2.0])
         lon_vals = np.array([0.0, 1.0])
