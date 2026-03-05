@@ -595,6 +595,42 @@ def run_physics_comparison() -> Dict[str, Any]:
         dlmsf_json_path = RESULTS_DIR / "dlmsf_alignment_metrics.json"
         if dlmsf_report.groups:
             save_report_json(dlmsf_report, dlmsf_json_path)
+
+            # --- DLMSF 对比可视化 ---
+            dlmsf_pairs = [
+                ("z",  dlmsf_result.S_map, "z_500"),
+                ("uv", dlmsf_result.S_map, "uv_500"),
+            ]
+            plot_topk_overlap_maps(
+                dlmsf_pairs, gnn_ig_maps,
+                swe_lat, swe_lon,
+                float(context.center_lat), float(context.center_lon),
+                target_time_idx=t_idx,
+                output_dir=RESULTS_DIR,
+                output_prefix="dlmsf",
+                dpi=dpi,
+                patch_radius=patch_radius,
+                patch_score_agg=patch_agg,
+                topk_overlap_k=panel_topk_overlap_k,
+            )
+
+            dlmsf_pairs_scatter = [
+                ("z",  dlmsf_result.S_map, "z_500",  "DLMSF $S$", "GNN IG (z₅₀₀)"),
+                ("uv", dlmsf_result.S_map, "uv_500", "DLMSF $S$", "GNN IG (uv magnitude)"),
+            ]
+            plot_alignment_scatter(
+                dlmsf_pairs_scatter, gnn_ig_maps, dlmsf_report,
+                target_time_idx=t_idx, lead_time_h=lead_h,
+                output_dir=RESULTS_DIR, output_prefix="dlmsf",
+                patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+            )
+
+            plot_topk_iou_curves(
+                dlmsf_pairs, gnn_ig_maps,
+                target_time_idx=t_idx, lead_time_h=lead_h,
+                output_dir=RESULTS_DIR, output_prefix="dlmsf",
+                k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+            )
         else:
             print("  [warn] DLMSF 对齐组为空（gnn_ig_maps 中无匹配 key），跳过写出报告")
     else:
