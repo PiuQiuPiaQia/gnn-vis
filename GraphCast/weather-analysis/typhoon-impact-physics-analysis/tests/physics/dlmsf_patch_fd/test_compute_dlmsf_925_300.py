@@ -81,3 +81,20 @@ class TestComputeDlmsf925300:
                 annulus_inner_km=0.0,
                 annulus_outer_km=9999.0,
             )
+
+    def test_fallback_when_env_points_insufficient(self):
+        """当 annulus 内有效点不足时，应降级到全域均值而非报错。"""
+        levels = np.array([925, 500, 300], dtype=np.float32)
+        u, v, lat, lon = _make_inputs(levels, u_val=4.0, v_val=2.0)
+        # annulus_outer_km=1.0 极小，几乎没有环境点 → 触发 fallback
+        U, V = compute_dlmsf_925_300(
+            u, v, levels, lat, lon,
+            center_lat=0.0, center_lon=120.0,
+            core_radius_deg=0.0,
+            annulus_inner_km=0.0,
+            annulus_outer_km=1.0,    # 极小环状域
+            min_env_points=10,       # 需要 10 个点，但 1km 环内几乎没有
+        )
+        # fallback 后使用全域均值，应接近 u_val=4.0
+        assert abs(U - 4.0) < 0.1
+        assert abs(V - 2.0) < 0.1

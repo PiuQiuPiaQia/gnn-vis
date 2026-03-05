@@ -48,7 +48,11 @@ def compute_d_hat(
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Haversine 公式计算两点之间的球面距离（km）。"""
+    """Haversine 公式计算两点之间的球面距离（km）。
+    
+    注意：与 physics/swe/steering.py 中的 _haversine_distance_km 逻辑等价，
+    此处使用 math 库以避免跨模块依赖。
+    """
     R = 6371.0
     lat1_r, lat2_r = math.radians(lat1), math.radians(lat2)
     dlat_r = math.radians(lat2 - lat1)
@@ -95,11 +99,23 @@ def compute_dlmsf_925_300(
         (U_dlmsf, V_dlmsf) pressure-thickness weighted environmental mean winds (m/s)
     """
     if u_levels.ndim != 3 or v_levels.ndim != 3:
-        raise ValueError("u_levels and v_levels must be 3D arrays")
+        raise ValueError(
+            f"u_levels and v_levels must be 3D arrays, "
+            f"got shapes {u_levels.shape} and {v_levels.shape}"
+        )
+    if u_levels.shape != v_levels.shape:
+        raise ValueError(
+            f"u_levels and v_levels shape mismatch: {u_levels.shape} vs {v_levels.shape}"
+        )
     if u_levels.shape[0] != len(levels_hpa):
         raise ValueError(
             f"u_levels first dimension ({u_levels.shape[0]}) must match "
             f"levels_hpa length ({len(levels_hpa)})"
+        )
+    if annulus_outer_km <= annulus_inner_km:
+        raise ValueError(
+            f"annulus_outer_km ({annulus_outer_km}) must be greater than "
+            f"annulus_inner_km ({annulus_inner_km})"
         )
 
     # 选取 300–925 hPa 层（含端点）
@@ -155,11 +171,16 @@ def compute_dlmsf_925_300(
 
     # 压厚加权空间均值
     U_sum, V_sum = 0.0, 0.0
+    count = 0
     for k in range(n_sel):
         u_env = u_sel[k][env_mask]
         v_env = v_sel[k][env_mask]
         if len(u_env) > 0:
             U_sum += float(weights[k]) * float(np.mean(u_env))
             V_sum += float(weights[k]) * float(np.mean(v_env))
-
+            count += 1
+    
+    if count == 0:
+        return float("nan"), float("nan")
+    
     return U_sum, V_sum
