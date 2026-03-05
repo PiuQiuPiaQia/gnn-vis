@@ -1,6 +1,5 @@
 from __future__ import annotations
 import math
-import pytest
 from physics.dlmsf_patch_fd.dlmsf_sensitivity import compute_d_hat
 
 
@@ -23,6 +22,11 @@ class TestComputeDHat:
     def test_diagonal_movement_is_normalized(self):
         """斜向移动时结果为单位向量。"""
         d_u, d_v = compute_d_hat(0.0, 0.0, 3.0, 4.0)
+        # dlon=4, dlat=3 → d_u=4/5, d_v=3/5
+        assert d_u > 0.0
+        assert d_v > 0.0
+        assert abs(d_u - 0.8) < 1e-6
+        assert abs(d_v - 0.6) < 1e-6
         assert abs(math.hypot(d_u, d_v) - 1.0) < 1e-6
 
     def test_stationary_cyclone_returns_zero(self):
@@ -34,4 +38,6 @@ class TestComputeDHat:
     def test_southward_movement(self):
         """台风向正南移动 → d_v < 0。"""
         d_u, d_v = compute_d_hat(5.0, 0.0, 0.0, 0.0)
+        assert abs(d_u) < 1e-6
         assert d_v < 0.0
+        assert abs(math.hypot(d_u, d_v) - 1.0) < 1e-6

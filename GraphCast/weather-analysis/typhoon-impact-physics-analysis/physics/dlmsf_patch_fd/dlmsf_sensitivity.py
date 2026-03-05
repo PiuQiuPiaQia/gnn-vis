@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import math
-import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
-import xarray
 
 
 @dataclass
@@ -33,8 +31,11 @@ def compute_d_hat(
 ) -> Tuple[float, float]:
     """计算台风移动方向的单位向量 (d_u, d_v)。
 
-    d_u 对应经向位移（东向为正），d_v 对应纬向位移（北向为正）。
+    d_u 对应经度方向位移（东向为正），d_v 对应纬度方向位移（北向为正）。
     若台风静止（lat0==lat1 且 lon0==lon1），返回 (0.0, 0.0)。
+
+    注意：d_hat 是在角度空间（degree）中归一化的单位向量，不是球面距离空间。
+    这种近似适用于台风路径的定性方向判断。
     """
     dlat = lat1 - lat0
     dlon = lon1 - lon0
