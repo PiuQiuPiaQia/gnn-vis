@@ -17,6 +17,10 @@ from physics.swe.alignment import (
     plot_topk_overlap_maps,
 )
 
+# pairs 结构说明：
+# - plot_topk_overlap_maps / plot_topk_iou_curves：List[Tuple[group_tag, S_map, gnn_key]]
+# - plot_alignment_scatter：List[Tuple[group_name, S_map, gnn_key, xlabel, ylabel]]
+
 
 def _dummy_map(seed: int = 0, shape=(10, 12)) -> np.ndarray:
     return np.random.default_rng(seed).random(shape).astype(np.float64)
@@ -52,8 +56,9 @@ class TestPlotTopkOverlapMapsNewApi:
             pairs, gnn_ig_maps, lat, lon, 25.0, 126.0,
             target_time_idx=0, output_dir=tmp_path, output_prefix="swe",
         )
-        files = sorted(tmp_path.glob("swe_overlap_*_t0.png"))
-        assert len(files) == 2
+        # 分别断言每个 group 的文件存在，避免宽松 glob 误通过
+        assert len(list(tmp_path.glob("swe_overlap_h_*_t0.png"))) == 1
+        assert len(list(tmp_path.glob("swe_overlap_uv_*_t0.png"))) == 1
 
     def test_dlmsf_pairs_generates_two_files(self, tmp_path, lat_lon, gnn_ig_maps):
         lat, lon = lat_lon
@@ -63,8 +68,9 @@ class TestPlotTopkOverlapMapsNewApi:
             pairs, gnn_ig_maps, lat, lon, 25.0, 126.0,
             target_time_idx=0, output_dir=tmp_path, output_prefix="dlmsf",
         )
-        files = sorted(tmp_path.glob("dlmsf_overlap_*_t0.png"))
-        assert len(files) == 2
+        # 分别断言每个 group 的文件存在
+        assert len(list(tmp_path.glob("dlmsf_overlap_z_*_t0.png"))) == 1
+        assert len(list(tmp_path.glob("dlmsf_overlap_uv_*_t0.png"))) == 1
 
     def test_missing_gnn_key_skipped(self, tmp_path, lat_lon):
         lat, lon = lat_lon
@@ -103,12 +109,13 @@ class TestPlotAlignmentScatterNewApi:
         assert (tmp_path / "swe_scatter_t0.png").exists()
 
     def test_dlmsf_scatter_creates_file(self, tmp_path, gnn_ig_maps):
+        """DLMSF scatter 正常生成文件；空 groups 时标题注解部分不渲染，但不应崩溃。"""
         S = _dummy_map(5)
         pairs = [
             ("z",  S, "z_500",  "DLMSF $S$", "GNN IG (z₅₀₀)"),
             ("uv", S, "uv_500", "DLMSF $S$", "GNN IG (uv magnitude)"),
         ]
-        report = AlignmentReport(0, 6, 2, "mean", 0.0)
+        report = AlignmentReport(0, 6, 2, "mean", 0.0)  # 空 groups：无 spearman 注解
         plot_alignment_scatter(
             pairs, gnn_ig_maps, report,
             target_time_idx=0, lead_time_h=6,
