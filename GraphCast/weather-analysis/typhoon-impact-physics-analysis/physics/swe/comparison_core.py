@@ -597,6 +597,7 @@ def run_physics_comparison() -> Dict[str, Any]:
             save_report_json(dlmsf_report, dlmsf_json_path)
 
             # --- DLMSF 对比可视化 ---
+            # DLMSF 只有一张综合敏感度图（不区分 h/uv），对 z_500 和 uv_500 分别做对比
             dlmsf_pairs = [
                 ("z",  dlmsf_result.S_map, "z_500"),
                 ("uv", dlmsf_result.S_map, "uv_500"),
@@ -615,8 +616,8 @@ def run_physics_comparison() -> Dict[str, Any]:
             )
 
             dlmsf_pairs_scatter = [
-                ("z",  dlmsf_result.S_map, "z_500",  "DLMSF $S$", "GNN IG (z₅₀₀)"),
-                ("uv", dlmsf_result.S_map, "uv_500", "DLMSF $S$", "GNN IG (uv magnitude)"),
+                ("dlmsf_z_500",  dlmsf_result.S_map, "z_500",  "DLMSF $S$", "GNN IG (z₅₀₀)"),
+                ("dlmsf_uv_500", dlmsf_result.S_map, "uv_500", "DLMSF $S$", "GNN IG (uv magnitude)"),
             ]
             plot_alignment_scatter(
                 dlmsf_pairs_scatter, gnn_ig_maps, dlmsf_report,
