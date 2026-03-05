@@ -80,8 +80,15 @@ class TestComputeDlmsfPatchFd:
             target_time_idx=0,
             patch_size_deg=2.0,
         )
-        # S_map 不全为 0（均匀场扰动后 DLMSF 应有变化）
+        # S_map 不全为 0
         assert not np.all(result.S_map == 0.0)
+        # 验证 patch 回填：同一 patch 内所有格点值相同
+        from physics.dlmsf_patch_fd.dlmsf_sensitivity import _build_patches
+        patches = _build_patches(lat, lon, patch_size_deg=2.0)
+        for mask in patches:
+            vals = result.S_map[mask]
+            if len(vals) > 1:
+                assert np.all(vals == vals[0]), "同一 patch 内格点值应相同（patch 回填）"
 
     def test_n_patches_positive(self):
         """至少有一个有效 patch。"""
@@ -110,3 +117,29 @@ class TestComputeDlmsfPatchFd:
             target_time_idx=0,
         )
         assert np.all(result.S_map >= 0.0)
+
+    def test_missing_level_dimension_raises(self):
+        """eval_inputs 中 u/v 没有 level 维度时应抛出 ValueError。"""
+        lat = np.linspace(-10, 10, 21)
+        lon = np.linspace(110, 130, 21)
+        # 构造无 level 维度的 Dataset（只有 lat/lon）
+        ds = xr.Dataset({
+            "u_component_of_wind": xr.DataArray(
+                np.ones((21, 21), dtype=np.float32),
+                dims=("lat", "lon"),
+                coords={"lat": lat, "lon": lon},
+            ),
+            "v_component_of_wind": xr.DataArray(
+                np.ones((21, 21), dtype=np.float32),
+                dims=("lat", "lon"),
+                coords={"lat": lat, "lon": lon},
+            ),
+        })
+        with pytest.raises(ValueError, match="level"):
+            compute_dlmsf_patch_fd(
+                eval_inputs=ds,
+                lat_vals=lat, lon_vals=lon,
+                center_lat=0.0, center_lon=120.0,
+                d_hat=(1.0, 0.0),
+                target_time_idx=0,
+            )

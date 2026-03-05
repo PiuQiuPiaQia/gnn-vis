@@ -203,10 +203,10 @@ def _extract_uv_levels(
     返回 (u, v, levels_hpa)，shape 均为 (n_lev, n_lat, n_lon)。
 
     Args:
-        eval_inputs: xarray Dataset，含 u_component_of_wind, v_component_of_wind
+        eval_inputs: xarray Dataset，含 u/v 多层场
         lat_vals: 目标子域纬度坐标
         lon_vals: 目标子域经度坐标
-        time_idx: 时间步索引（默认 1，对应 t=0h）
+        time_idx: 时间步索引（默认 1，对应 t=0h（评估时刻的初始条件））
 
     Raises:
         ValueError: 如果缺少 'level' 维度
@@ -259,9 +259,9 @@ def _build_patches(
 
     patches = []
     p_lat = lat_min
-    while p_lat < lat_max:
+    while p_lat <= lat_max + patch_size_deg * 0.5:
         p_lon = lon_min
-        while p_lon < lon_max:
+        while p_lon <= lon_max + patch_size_deg * 0.5:
             lat_mask = (lat_vals >= p_lat) & (lat_vals < p_lat + patch_size_deg)
             lon_mask = (lon_vals >= p_lon) & (lon_vals < p_lon + patch_size_deg)
             mask = np.outer(lat_mask, lon_mask)
@@ -304,7 +304,8 @@ def compute_dlmsf_patch_fd(
         center_lat: 台风中心纬度
         center_lon: 台风中心经度
         d_hat: 台风移动方向单位向量 (d_u, d_v)，由 compute_d_hat 计算
-        target_time_idx: 目标预报时次索引（仅用于存储到结果中）
+        target_time_idx: 预报时次索引（仅用于标注结果，不影响数据提取；
+            DLMSF 始终使用 eval_inputs 中 time[1] 的初始条件风场）
         patch_size_deg: patch 尺寸（度），默认 2.0°
         eps: 有限差分扰动量（m/s），默认 1.0
         core_radius_deg: 核心排除半径（度）
@@ -331,6 +332,20 @@ def compute_dlmsf_patch_fd(
         annulus_outer_km=annulus_outer_km,
     )
     J0 = float(U0) * d_u + float(V0) * d_v
+    
+    if math.isnan(J0):
+        print("[DLMSF-FD] warn: baseline J0 is NaN (likely all-NaN wind field). "
+              "Returning zero S_map.")
+        elapsed = time.perf_counter() - t0
+        patches = _build_patches(lat_vals, lon_vals, patch_size_deg)
+        return DLMSFSensitivityResult(
+            S_map=S_map, lat_vals=lat_vals, lon_vals=lon_vals,
+            center_lat=center_lat, center_lon=center_lon,
+            target_time_idx=target_time_idx,
+            d_hat=d_hat, J_phys_baseline=float("nan"),
+            U_dlmsf=float(U0), V_dlmsf=float(V0),
+            n_patches=len(patches), elapsed_sec=elapsed,
+        )
 
     S_map = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
 
