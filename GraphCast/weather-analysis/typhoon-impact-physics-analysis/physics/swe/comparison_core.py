@@ -532,9 +532,9 @@ def run_physics_comparison() -> Dict[str, Any]:
     dpi = getattr(cfg, "PHYSICS_HEATMAP_DPI", runtime_cfg.heatmap_dpi)
     panel_topk_overlap_k = int(getattr(cfg, "SWE_PANEL_TOPK_OVERLAP_K", 50))
 
-    swe_pairs_overlap = [("h", jax_result.S_h, "z_500"), ("uv", jax_result.S_uv, "uv_500")]
+    swe_pairs = [("h", jax_result.S_h, "z_500"), ("uv", jax_result.S_uv, "uv_500")]
     plot_topk_overlap_maps(
-        swe_pairs_overlap, gnn_ig_maps,
+        swe_pairs, gnn_ig_maps,
         np.asarray(jax_result.lat_vals, dtype=np.float64),
         np.asarray(jax_result.lon_vals, dtype=np.float64),
         float(jax_result.center_lat), float(jax_result.center_lon),
@@ -558,9 +558,8 @@ def run_physics_comparison() -> Dict[str, Any]:
         patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
     )
 
-    swe_pairs_iou = [("h", jax_result.S_h, "z_500"), ("uv", jax_result.S_uv, "uv_500")]
     plot_topk_iou_curves(
-        swe_pairs_iou, gnn_ig_maps,
+        swe_pairs, gnn_ig_maps,
         target_time_idx=t_idx, lead_time_h=lead_h,
         output_dir=RESULTS_DIR, output_prefix="swe",
         k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
