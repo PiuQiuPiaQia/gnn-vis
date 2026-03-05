@@ -3,16 +3,13 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import scipy.stats
 import xarray
 
 from shared.patch_scoring_utils import window_reduce_2d
-
-if TYPE_CHECKING:
-    from physics.swe.swe_sensitivity import SWESensitivityResult
 
 
 @dataclass
@@ -211,9 +208,15 @@ def compute_alignment_report(
 
 
 def plot_topk_overlap_maps(
-    swe_result: SWESensitivityResult,
+    pairs: List[Tuple[str, np.ndarray, str]],
     gnn_ig_maps: Dict[str, np.ndarray],
+    lat_vals: np.ndarray,
+    lon_vals: np.ndarray,
+    center_lat: float,
+    center_lon: float,
+    target_time_idx: int,
     output_dir: Path,
+    output_prefix: str = "swe",
     dpi: int = 200,
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
@@ -224,23 +227,17 @@ def plot_topk_overlap_maps(
     from matplotlib.patches import Patch
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    lat = np.asarray(swe_result.lat_vals, dtype=np.float64)
-    lon = np.asarray(swe_result.lon_vals, dtype=np.float64)
-    lead_h = (swe_result.target_time_idx + 1) * 6
+    lat = np.asarray(lat_vals, dtype=np.float64)
+    lon = np.asarray(lon_vals, dtype=np.float64)
+    lead_h = (target_time_idx + 1) * 6
     lat_asc = lat[0] < lat[-1]
     origin = "lower" if lat_asc else "upper"
-    extent = (lon.min(), lon.max(), lat.min(), lat.max())
 
-    groups = [
-        ("h", swe_result.S_h, "z_500"),
-        ("uv", swe_result.S_uv, "uv_500"),
-    ]
-
-    for group_tag, swe_arr, gnn_key in groups:
+    for group_tag, S_map, gnn_key in pairs:
         if gnn_key not in gnn_ig_maps:
             continue
         gnn_arr = _patch(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
-        overlap_code, actual_k = _topk_overlap_code(swe_arr, gnn_arr, topk_overlap_k)
+        overlap_code, actual_k = _topk_overlap_code(S_map, gnn_arr, topk_overlap_k)
         fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
         cmap = ListedColormap(["#f2f2f2", "#ff7f0e", "#1f77b4", "#2ca02c"])
         norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap.N)
@@ -252,14 +249,14 @@ def plot_topk_overlap_maps(
             norm=norm,
             aspect="auto",
         )
-        ax.scatter([swe_result.center_lon], [swe_result.center_lat], c="#00e5ff", marker="x", s=80, linewidths=2)
+        ax.scatter([center_lon], [center_lat], c="#00e5ff", marker="x", s=80, linewidths=2)
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
         ax.set_title(f"Top-{actual_k} overlap ({group_tag}) — +{lead_h}h")
         ax.legend(
             handles=[
                 Patch(facecolor="#2ca02c", edgecolor="none", label="Overlap"),
-                Patch(facecolor="#ff7f0e", edgecolor="none", label="SWE only"),
+                Patch(facecolor="#ff7f0e", edgecolor="none", label=f"{output_prefix.upper()} only"),
                 Patch(facecolor="#1f77b4", edgecolor="none", label="IG only"),
             ],
             loc="upper right",
@@ -267,10 +264,10 @@ def plot_topk_overlap_maps(
             framealpha=0.9,
         )
         fig.tight_layout()
-        out_overlap = output_dir / f"physics_topk_overlap_{group_tag}_k{actual_k}_t{swe_result.target_time_idx}.png"
-        fig.savefig(out_overlap)
+        out = output_dir / f"{output_prefix}_overlap_{group_tag}_k{actual_k}_t{target_time_idx}.png"
+        fig.savefig(out)
         plt.close(fig)
-        print(f"Saved: {out_overlap}")
+        print(f"Saved: {out}")
 
 
 def plot_sensitivity_heatmaps(
@@ -326,10 +323,13 @@ def plot_sensitivity_heatmaps(
 
 
 def plot_alignment_scatter(
-    swe_result: SWESensitivityResult,
+    pairs: List[Tuple[str, np.ndarray, str, str, str]],
     gnn_ig_maps: Dict[str, np.ndarray],
     report: AlignmentReport,
+    target_time_idx: int,
+    lead_time_h: int,
     output_dir: Path,
+    output_prefix: str = "swe",
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
     dpi: int = 200,
@@ -337,23 +337,18 @@ def plot_alignment_scatter(
     import matplotlib.pyplot as plt
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    lead_h = (swe_result.target_time_idx + 1) * 6
-    t = swe_result.target_time_idx
-
-    pairs = [
-        ("h",     swe_result.S_h,     "z_500",  "SWE $S_h$",    "GNN IG (z₅₀₀)"),
-        ("uv",    swe_result.S_uv,    "uv_500", "SWE $S_{uv}$", "GNN IG (uv magnitude)"),
-    ]
+    t = target_time_idx
+    lead_h = lead_time_h
 
     fig, axes = plt.subplots(1, len(pairs), figsize=(5 * len(pairs), 5), dpi=dpi)
     axes_list = np.atleast_1d(axes)
-    for ax, (gname, swe_arr, gnn_key, xlabel, ylabel) in zip(axes_list, pairs):
+    for ax, (gname, S_map, gnn_key, xlabel, ylabel) in zip(axes_list, pairs):
         if gnn_key not in gnn_ig_maps:
             ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
             ax.set_title(gname)
             continue
 
-        s = _patch(swe_arr, patch_radius, patch_score_agg)
+        s = _patch(S_map, patch_radius, patch_score_agg)
         g = _patch(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
         a, b = _safe_finite_pair(s, g)
         if len(a) < 3:
@@ -372,18 +367,21 @@ def plot_alignment_scatter(
                 fontsize=10,
             )
 
-    fig.suptitle(f"SWE vs GNN IG Alignment — +{lead_h}h", fontsize=13)
+    fig.suptitle(f"{output_prefix.upper()} vs GNN IG Alignment — +{lead_h}h", fontsize=13)
     fig.tight_layout()
-    out = output_dir / f"physics_alignment_scatter_t{t}.png"
+    out = output_dir / f"{output_prefix}_scatter_t{t}.png"
     fig.savefig(out)
     plt.close(fig)
     print(f"Saved: {out}")
 
 
 def plot_topk_iou_curves(
-    swe_result: SWESensitivityResult,
+    pairs: List[Tuple[str, np.ndarray, str]],
     gnn_ig_maps: Dict[str, np.ndarray],
+    target_time_idx: int,
+    lead_time_h: int,
     output_dir: Path,
+    output_prefix: str = "swe",
     k_values: Tuple[int, ...] = (10, 20, 50, 100, 150, 200, 300),
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
@@ -392,24 +390,19 @@ def plot_topk_iou_curves(
     import matplotlib.pyplot as plt
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    lead_h = (swe_result.target_time_idx + 1) * 6
-    t = swe_result.target_time_idx
-
-    pairs = [
-        ("h",     swe_result.S_h,     "z_500"),
-        ("uv",    swe_result.S_uv,    "uv_500"),
-    ]
-    colors = {"h": "royalblue", "uv": "tomato"}
+    lead_h = lead_time_h
+    t = target_time_idx
+    colors = ["royalblue", "tomato", "mediumseagreen", "darkorange"]
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    for gname, swe_arr, gnn_key in pairs:
+    for (gname, S_map, gnn_key), color in zip(pairs, colors):
         if gnn_key not in gnn_ig_maps:
             continue
         iou_vals = [
-            compute_topk_iou(swe_arr, gnn_ig_maps[gnn_key], (k,), patch_radius, patch_score_agg)[k]
+            compute_topk_iou(S_map, gnn_ig_maps[gnn_key], (k,), patch_radius, patch_score_agg)[k]
             for k in k_values
         ]
-        ax.plot(k_values, iou_vals, marker=".", label=gname, color=colors[gname], linewidth=2)
+        ax.plot(k_values, iou_vals, marker=".", label=gname, color=color, linewidth=2)
 
     ax.set_xlabel("K (Top-K threshold)")
     ax.set_ylabel("IoU")
@@ -418,7 +411,7 @@ def plot_topk_iou_curves(
     ax.grid(True, alpha=0.3)
     ax.set_ylim(0.0, 1.05)
     fig.tight_layout()
-    out = output_dir / f"physics_alignment_topk_t{t}.png"
+    out = output_dir / f"{output_prefix}_iou_t{t}.png"
     fig.savefig(out)
     plt.close(fig)
     print(f"Saved: {out}")
