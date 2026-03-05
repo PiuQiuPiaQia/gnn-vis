@@ -22,6 +22,7 @@ from physics.swe.alignment import (
     plot_topk_iou_curves,
     save_report_json,
     _group_metrics,
+    AlignmentReport,
 )
 from physics.swe.swe_sensitivity import (
     compute_sensitivity_jax,
@@ -436,10 +437,17 @@ def run_physics_comparison() -> Dict[str, Any]:
                 compute_dlmsf_patch_fd,
             )
             from cyclone_points import CYCLONE_CENTERS, pick_target_cyclone
-
+        except ImportError as exc:
+            print(f"  [warn] DLMSF 模块未找到，已跳过: {exc}")
+        else:
             init_center = next(
-                c for c in CYCLONE_CENTERS if c.get("input_time_idx") == 1
+                (c for c in CYCLONE_CENTERS if c.get("input_time_idx") == 1), None
             )
+            if init_center is None:
+                raise ValueError(
+                    "CYCLONE_CENTERS 中找不到 input_time_idx==1 的记录，"
+                    "请检查 cyclone_points.py 配置"
+                )
             target_center = pick_target_cyclone(t_idx)
             d_hat = compute_d_hat(
                 float(init_center["lat"]), float(init_center["lon"]),
@@ -465,8 +473,6 @@ def run_physics_comparison() -> Dict[str, Any]:
             )
             print(f"  DLMSF done: n_patches={dlmsf_result.n_patches}  "
                   f"elapsed={dlmsf_result.elapsed_sec:.1f}s")
-        except Exception as exc:
-            print(f"  [warn] DLMSF skipped: {exc}")
     else:
         print("  DLMSF_ENABLE=False, skipped.")
 
@@ -545,7 +551,6 @@ def run_physics_comparison() -> Dict[str, Any]:
     print("\n[Phase 3b] DLMSF vs IG Alignment")
     dlmsf_report = None
     if dlmsf_result is not None:
-        from physics.swe.alignment import AlignmentReport
         dlmsf_report = AlignmentReport(
             target_time_idx=t_idx,
             lead_time_h=lead_h,
@@ -568,7 +573,10 @@ def run_physics_comparison() -> Dict[str, Any]:
             print(f"  [DLMSF Align] {gnn_key}: ρ={m.spearman_rho:+.3f}  "
                   f"IoU@50={m.topk_iou.get(50, float('nan')):.3f}  n={m.n_valid}")
         dlmsf_json_path = RESULTS_DIR / "dlmsf_alignment_metrics.json"
-        save_report_json(dlmsf_report, dlmsf_json_path)
+        if dlmsf_report.groups:
+            save_report_json(dlmsf_report, dlmsf_json_path)
+        else:
+            print("  [warn] DLMSF 对齐组为空（gnn_ig_maps 中无匹配 key），跳过写出报告")
     else:
         print("  DLMSF result unavailable, skipped.")
 

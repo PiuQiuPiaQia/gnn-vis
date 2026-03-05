@@ -108,5 +108,5 @@ IG_SANITY_MIN_LIFT_RATIO = 1.1
 DLMSF_ENABLE             = True
 DLMSF_PATCH_SIZE_DEG     = 2.0    # patch 尺寸（度）
 DLMSF_EPS                = 1.0    # 有限差分扰动量（m/s）
-DLMSF_LEVELS_BOTTOM_HPA  = 925.0
-DLMSF_LEVELS_TOP_HPA     = 300.0
+DLMSF_LEVELS_BOTTOM_HPA  = 925.0  # 垂直积分下界气压层（hPa，近地面）
+DLMSF_LEVELS_TOP_HPA     = 300.0  # 垂直积分上界气压层（hPa，对流层顶附近）
