@@ -531,19 +531,40 @@ def run_physics_comparison() -> Dict[str, Any]:
     print("\n[Phase 4] Saving Visualizations")
     dpi = getattr(cfg, "PHYSICS_HEATMAP_DPI", runtime_cfg.heatmap_dpi)
     panel_topk_overlap_k = int(getattr(cfg, "SWE_PANEL_TOPK_OVERLAP_K", 50))
+
+    swe_pairs_overlap = [("h", jax_result.S_h, "z_500"), ("uv", jax_result.S_uv, "uv_500")]
     plot_topk_overlap_maps(
-        jax_result,
-        gnn_ig_maps,
-        RESULTS_DIR,
+        swe_pairs_overlap, gnn_ig_maps,
+        np.asarray(jax_result.lat_vals, dtype=np.float64),
+        np.asarray(jax_result.lon_vals, dtype=np.float64),
+        float(jax_result.center_lat), float(jax_result.center_lon),
+        target_time_idx=t_idx,
+        output_dir=RESULTS_DIR,
+        output_prefix="swe",
         dpi=dpi,
         patch_radius=patch_radius,
         patch_score_agg=patch_agg,
         topk_overlap_k=panel_topk_overlap_k,
     )
-    plot_alignment_scatter(jax_result, gnn_ig_maps, report, RESULTS_DIR,
-                           patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi)
-    plot_topk_iou_curves(jax_result, gnn_ig_maps, RESULTS_DIR,
-                         k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi)
+
+    swe_pairs_scatter = [
+        ("h",  jax_result.S_h,  "z_500",  "SWE $S_h$",    "GNN IG (z₅₀₀)"),
+        ("uv", jax_result.S_uv, "uv_500", "SWE $S_{uv}$", "GNN IG (uv magnitude)"),
+    ]
+    plot_alignment_scatter(
+        swe_pairs_scatter, gnn_ig_maps, report,
+        target_time_idx=t_idx, lead_time_h=lead_h,
+        output_dir=RESULTS_DIR, output_prefix="swe",
+        patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+    )
+
+    swe_pairs_iou = [("h", jax_result.S_h, "z_500"), ("uv", jax_result.S_uv, "uv_500")]
+    plot_topk_iou_curves(
+        swe_pairs_iou, gnn_ig_maps,
+        target_time_idx=t_idx, lead_time_h=lead_h,
+        output_dir=RESULTS_DIR, output_prefix="swe",
+        k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+    )
 
     json_path = RESULTS_DIR / "physics_alignment_metrics.json"
     save_report_json(report, json_path)
