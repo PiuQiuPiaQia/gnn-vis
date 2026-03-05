@@ -398,9 +398,10 @@ def plot_topk_iou_curves(
     colors = ["royalblue", "tomato", "mediumseagreen", "darkorange"]
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    for (gname, S_map, gnn_key), color in zip(pairs, colors):
+    for i, (gname, S_map, gnn_key) in enumerate(pairs):
         if gnn_key not in gnn_ig_maps:
             continue
+        color = colors[i % len(colors)]
         iou_vals = [
             compute_topk_iou(S_map, gnn_ig_maps[gnn_key], (k,), patch_radius, patch_score_agg)[k]
             for k in k_values
