@@ -120,6 +120,7 @@ class TestDlmsfVisualizationContract:
         """Phase 3b 应调用 plot_topk_overlap_maps 并传入 output_prefix='dlmsf'。"""
         source = self._read_source()
         assert 'output_prefix="dlmsf"' in source or "output_prefix='dlmsf'" in source
+        assert "plot_topk_overlap_maps" in source
 
     def test_dlmsf_scatter_plot_called(self):
         """Phase 3b 应调用 plot_alignment_scatter（通过 dlmsf_pairs_scatter 区分）。"""
@@ -127,6 +128,6 @@ class TestDlmsfVisualizationContract:
         assert "dlmsf_pairs_scatter" in source
 
     def test_dlmsf_iou_plot_called(self):
-        """Phase 3b 应调用 plot_topk_iou_curves（通过 dlmsf_pairs 区分）。"""
+        """Phase 3b 应调用 plot_topk_iou_curves 绘制 DLMSF IoU 曲线图。"""
         source = self._read_source()
-        assert "dlmsf_pairs" in source
+        assert "plot_topk_iou_curves" in source
