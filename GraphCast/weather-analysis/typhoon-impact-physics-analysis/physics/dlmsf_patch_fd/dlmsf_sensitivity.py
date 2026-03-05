@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
+import xarray
 
 
 @dataclass
@@ -184,3 +186,199 @@ def compute_dlmsf_925_300(
         return float("nan"), float("nan")
     
     return U_sum, V_sum
+
+
+_U_VAR = "u_component_of_wind"
+_V_VAR = "v_component_of_wind"
+
+
+def _extract_uv_levels(
+    eval_inputs: xarray.Dataset,
+    lat_vals: np.ndarray,
+    lon_vals: np.ndarray,
+    time_idx: int = 1,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """从 eval_inputs 提取 u/v 多层场。
+
+    返回 (u, v, levels_hpa)，shape 均为 (n_lev, n_lat, n_lon)。
+
+    Args:
+        eval_inputs: xarray Dataset，含 u_component_of_wind, v_component_of_wind
+        lat_vals: 目标子域纬度坐标
+        lon_vals: 目标子域经度坐标
+        time_idx: 时间步索引（默认 1，对应 t=0h）
+
+    Raises:
+        ValueError: 如果缺少 'level' 维度
+    """
+    u_da = eval_inputs[_U_VAR]
+    v_da = eval_inputs[_V_VAR]
+    if "batch" in u_da.dims:
+        u_da = u_da.isel(batch=0)
+        v_da = v_da.isel(batch=0)
+    if "time" in u_da.dims:
+        u_da = u_da.isel(time=time_idx)
+        v_da = v_da.isel(time=time_idx)
+    if "level" not in u_da.dims:
+        raise ValueError(
+            f"{_U_VAR} has no 'level' dimension; DLMSF requires multi-level data."
+        )
+    u_da = (
+        u_da.sel(lat=lat_vals, method="nearest")
+        .sel(lon=lon_vals, method="nearest")
+        .transpose("level", "lat", "lon")
+    )
+    v_da = (
+        v_da.sel(lat=lat_vals, method="nearest")
+        .sel(lon=lon_vals, method="nearest")
+        .transpose("level", "lat", "lon")
+    )
+    levels = np.asarray(u_da.coords["level"].values, dtype=np.float32)
+    return (
+        np.asarray(u_da.values, dtype=np.float32),
+        np.asarray(v_da.values, dtype=np.float32),
+        levels,
+    )
+
+
+def _build_patches(
+    lat_vals: np.ndarray,
+    lon_vals: np.ndarray,
+    patch_size_deg: float,
+) -> list:
+    """构建覆盖整个 ROI 的矩形 patch 列表。
+
+    每个 patch 为一个布尔掩膜 (n_lat, n_lon)，覆盖 patch_size_deg × patch_size_deg 的区域。
+    Patch 沿经纬度方向滑动，起点为各方向最小值，步长等于 patch_size_deg。
+
+    Returns:
+        List of boolean masks, each shape (n_lat, n_lon)
+    """
+    lat_min, lat_max = float(lat_vals.min()), float(lat_vals.max())
+    lon_min, lon_max = float(lon_vals.min()), float(lon_vals.max())
+
+    patches = []
+    p_lat = lat_min
+    while p_lat < lat_max:
+        p_lon = lon_min
+        while p_lon < lon_max:
+            lat_mask = (lat_vals >= p_lat) & (lat_vals < p_lat + patch_size_deg)
+            lon_mask = (lon_vals >= p_lon) & (lon_vals < p_lon + patch_size_deg)
+            mask = np.outer(lat_mask, lon_mask)
+            if mask.any():
+                patches.append(mask)
+            p_lon += patch_size_deg
+        p_lat += patch_size_deg
+    return patches
+
+
+def compute_dlmsf_patch_fd(
+    eval_inputs: xarray.Dataset,
+    lat_vals: np.ndarray,
+    lon_vals: np.ndarray,
+    center_lat: float,
+    center_lon: float,
+    d_hat: Tuple[float, float],
+    target_time_idx: int,
+    patch_size_deg: float = 2.0,
+    eps: float = 1.0,
+    core_radius_deg: float = 3.0,
+    annulus_inner_km: float = 300.0,
+    annulus_outer_km: float = 900.0,
+    levels_bottom_hpa: float = 925.0,
+    levels_top_hpa: float = 300.0,
+) -> DLMSFSensitivityResult:
+    """有限差分 patch 扰动计算 DLMSF 敏感度图。
+
+    对 ROI 划分为 patch_size_deg × patch_size_deg 的矩形 patch，对每个 patch
+    施加 +eps (m/s) 的 u/v 扰动，通过有限差分估计该 patch 对 J_phys 的贡献：
+        S_P = |J_phys_pert - J_phys_baseline| / eps
+
+    J_phys = DLMSF · d_hat，其中 DLMSF 为 [levels_top_hpa, levels_bottom_hpa]
+    范围内的压厚加权环境引导气流向量。
+
+    Args:
+        eval_inputs: xarray Dataset，含 u/v 多层场
+        lat_vals: 子域纬度坐标（通常与 SWE 子域一致）
+        lon_vals: 子域经度坐标
+        center_lat: 台风中心纬度
+        center_lon: 台风中心经度
+        d_hat: 台风移动方向单位向量 (d_u, d_v)，由 compute_d_hat 计算
+        target_time_idx: 目标预报时次索引（仅用于存储到结果中）
+        patch_size_deg: patch 尺寸（度），默认 2.0°
+        eps: 有限差分扰动量（m/s），默认 1.0
+        core_radius_deg: 核心排除半径（度）
+        annulus_inner_km: 环境环内径（km）
+        annulus_outer_km: 环境环外径（km）
+        levels_bottom_hpa: DLMSF 层结底层气压（hPa），默认 925
+        levels_top_hpa: DLMSF 层结顶层气压（hPa），默认 300
+
+    Returns:
+        DLMSFSensitivityResult 含 S_map (n_lat, n_lon)
+    """
+    t0 = time.perf_counter()
+    d_u, d_v = d_hat
+
+    # 提取 u/v 多层场
+    u_base, v_base, levels = _extract_uv_levels(eval_inputs, lat_vals, lon_vals, time_idx=1)
+
+    # 基线 J_phys
+    U0, V0 = compute_dlmsf_925_300(
+        u_base, v_base, levels, lat_vals, lon_vals,
+        center_lat, center_lon,
+        core_radius_deg=core_radius_deg,
+        annulus_inner_km=annulus_inner_km,
+        annulus_outer_km=annulus_outer_km,
+    )
+    J0 = float(U0) * d_u + float(V0) * d_v
+
+    S_map = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
+
+    # d_hat 为零向量时，J 恒为 0，S_map 全零
+    if abs(d_u) < 1e-10 and abs(d_v) < 1e-10:
+        elapsed = time.perf_counter() - t0
+        patches = _build_patches(lat_vals, lon_vals, patch_size_deg)
+        return DLMSFSensitivityResult(
+            S_map=S_map, lat_vals=lat_vals, lon_vals=lon_vals,
+            center_lat=center_lat, center_lon=center_lon,
+            target_time_idx=target_time_idx,
+            d_hat=d_hat, J_phys_baseline=0.0,
+            U_dlmsf=float(U0) if not math.isnan(U0) else 0.0,
+            V_dlmsf=float(V0) if not math.isnan(V0) else 0.0,
+            n_patches=len(patches), elapsed_sec=elapsed,
+        )
+
+    # 构建 patch 列表并逐 patch 有限差分
+    patches = _build_patches(lat_vals, lon_vals, patch_size_deg)
+    for mask in patches:
+        u_pert = u_base.copy()
+        v_pert = v_base.copy()
+        # 对所有层的该 patch 区域同时施加 +eps 扰动
+        u_pert[:, mask] += eps
+        v_pert[:, mask] += eps
+        U_p, V_p = compute_dlmsf_925_300(
+            u_pert, v_pert, levels, lat_vals, lon_vals,
+            center_lat, center_lon,
+            core_radius_deg=core_radius_deg,
+            annulus_inner_km=annulus_inner_km,
+            annulus_outer_km=annulus_outer_km,
+        )
+        J_p = float(U_p) * d_u + float(V_p) * d_v
+        S_P = abs(J_p - J0) / eps
+        S_map[mask] = S_P
+
+    elapsed = time.perf_counter() - t0
+    n_patches = len(patches)
+    print(
+        f"[DLMSF-FD] +{(target_time_idx + 1) * 6}h  {n_patches} patches  "
+        f"{elapsed:.1f}s  U_dlmsf={U0:+.2f} V_dlmsf={V0:+.2f}  J0={J0:+.4f}"
+    )
+
+    return DLMSFSensitivityResult(
+        S_map=S_map, lat_vals=lat_vals, lon_vals=lon_vals,
+        center_lat=center_lat, center_lon=center_lon,
+        target_time_idx=target_time_idx,
+        d_hat=d_hat, J_phys_baseline=float(J0),
+        U_dlmsf=float(U0), V_dlmsf=float(V0),
+        n_patches=n_patches, elapsed_sec=elapsed,
+    )
