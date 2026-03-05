@@ -21,6 +21,7 @@ from physics.swe.alignment import (
     plot_topk_overlap_maps,
     plot_topk_iou_curves,
     save_report_json,
+    _group_metrics,
 )
 from physics.swe.swe_sensitivity import (
     compute_sensitivity_jax,
@@ -426,6 +427,49 @@ def run_physics_comparison() -> Dict[str, Any]:
         print(f"  Saved sweep: {sweep_path}")
         print("  Sweep upstream_fraction:", [round(float(r["upstream_fraction"]), 3) for r in sweep_rows])
 
+    print("\n[Phase 1c] DLMSF Physical Sensitivity (Finite Difference)")
+    dlmsf_result = None
+    if bool(getattr(cfg, "DLMSF_ENABLE", True)):
+        try:
+            from physics.dlmsf_patch_fd.dlmsf_sensitivity import (
+                compute_d_hat,
+                compute_dlmsf_patch_fd,
+            )
+            from cyclone_points import CYCLONE_CENTERS, pick_target_cyclone
+
+            init_center = next(
+                c for c in CYCLONE_CENTERS if c.get("input_time_idx") == 1
+            )
+            target_center = pick_target_cyclone(t_idx)
+            d_hat = compute_d_hat(
+                float(init_center["lat"]), float(init_center["lon"]),
+                float(target_center["lat"]), float(target_center["lon"]),
+            )
+            print(f"  d_hat=({d_hat[0]:+.3f}, {d_hat[1]:+.3f})")
+
+            dlmsf_result = compute_dlmsf_patch_fd(
+                eval_inputs=context.eval_inputs,
+                lat_vals=swe_lat,
+                lon_vals=swe_lon,
+                center_lat=context.center_lat,
+                center_lon=context.center_lon,
+                d_hat=d_hat,
+                target_time_idx=t_idx,
+                patch_size_deg=float(getattr(cfg, "DLMSF_PATCH_SIZE_DEG", 2.0)),
+                eps=float(getattr(cfg, "DLMSF_EPS", 1.0)),
+                core_radius_deg=core_radius_deg,
+                annulus_inner_km=float(getattr(cfg, "SWE_STEERING_ANNULUS_INNER_KM", 300.0)),
+                annulus_outer_km=float(getattr(cfg, "SWE_STEERING_ANNULUS_OUTER_KM", 900.0)),
+                levels_bottom_hpa=float(getattr(cfg, "DLMSF_LEVELS_BOTTOM_HPA", 925.0)),
+                levels_top_hpa=float(getattr(cfg, "DLMSF_LEVELS_TOP_HPA", 300.0)),
+            )
+            print(f"  DLMSF done: n_patches={dlmsf_result.n_patches}  "
+                  f"elapsed={dlmsf_result.elapsed_sec:.1f}s")
+        except Exception as exc:
+            print(f"  [warn] DLMSF skipped: {exc}")
+    else:
+        print("  DLMSF_ENABLE=False, skipped.")
+
     print("\n[Phase 2] GNN IG for SWE-comparable vars (geopotential, u, v @ 500hPa)")
     gnn_ig_raw = _compute_gnn_ig_for_swe_vars(context, runtime_cfg, baseline_inputs)
     print(f"  GNN IG computed for: {list(gnn_ig_raw.keys())}")
@@ -498,6 +542,36 @@ def run_physics_comparison() -> Dict[str, Any]:
     json_path = RESULTS_DIR / "physics_alignment_metrics.json"
     save_report_json(report, json_path)
 
+    print("\n[Phase 3b] DLMSF vs IG Alignment")
+    dlmsf_report = None
+    if dlmsf_result is not None:
+        from physics.swe.alignment import AlignmentReport
+        dlmsf_report = AlignmentReport(
+            target_time_idx=t_idx,
+            lead_time_h=lead_h,
+            patch_radius=patch_radius,
+            patch_score_agg=patch_agg,
+            sigma_deg=0.0,
+        )
+        for gnn_key in ["z_500", "uv_500"]:
+            if gnn_key not in gnn_ig_maps:
+                continue
+            m = _group_metrics(
+                dlmsf_result.S_map,
+                gnn_ig_maps[gnn_key],
+                group_name=f"dlmsf_{gnn_key}",
+                patch_radius=patch_radius,
+                patch_score_agg=patch_agg,
+                k_values=k_values,
+            )
+            dlmsf_report.groups.append(m)
+            print(f"  [DLMSF Align] {gnn_key}: ρ={m.spearman_rho:+.3f}  "
+                  f"IoU@50={m.topk_iou.get(50, float('nan')):.3f}  n={m.n_valid}")
+        dlmsf_json_path = RESULTS_DIR / "dlmsf_alignment_metrics.json"
+        save_report_json(dlmsf_report, dlmsf_json_path)
+    else:
+        print("  DLMSF result unavailable, skipped.")
+
     elapsed = time.perf_counter() - t_start
     print(f"\n=== Done in {elapsed:.1f}s ===")
     print(f"Results saved to: {RESULTS_DIR}/")
@@ -506,6 +580,8 @@ def run_physics_comparison() -> Dict[str, Any]:
         "jax_result": jax_result,
         "gnn_ig_maps": gnn_ig_maps,
         "report": report,
+        "dlmsf_result": dlmsf_result,     # 新增
+        "dlmsf_report": dlmsf_report,     # 新增
         "upstream_fraction_series": [float(r["upstream_fraction"]) for r in sweep_rows if np.isfinite(float(r["upstream_fraction"]))],
         "ig_sanity": ig_sanity_payload,
         "elapsed_sec": elapsed,
