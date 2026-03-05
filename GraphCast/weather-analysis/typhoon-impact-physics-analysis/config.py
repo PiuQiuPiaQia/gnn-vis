@@ -103,3 +103,10 @@ IG_SANITY_TOPK = 10
 IG_SANITY_RANDOM_K = 10
 IG_SANITY_SEED = 42
 IG_SANITY_MIN_LIFT_RATIO = 1.1
+
+# DLMSF Patch FD 配置
+DLMSF_ENABLE             = True
+DLMSF_PATCH_SIZE_DEG     = 2.0    # patch 尺寸（度）
+DLMSF_EPS                = 1.0    # 有限差分扰动量（m/s）
+DLMSF_LEVELS_BOTTOM_HPA  = 925.0
+DLMSF_LEVELS_TOP_HPA     = 300.0
