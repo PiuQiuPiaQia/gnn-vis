@@ -105,3 +105,28 @@ class TestDlmsfReturnDictKeys:
         # 验证 return dict 中包含两个新字段
         assert "dlmsf_result" in source
         assert "dlmsf_report" in source
+
+
+class TestDlmsfVisualizationContract:
+    """验证 comparison_core.py 中 DLMSF 绘图调用已正确写入源码。"""
+
+    def _read_source(self) -> str:
+        from pathlib import Path
+        return (
+            Path(__file__).parent.parent.parent / "physics" / "swe" / "comparison_core.py"
+        ).read_text(encoding="utf-8")
+
+    def test_dlmsf_overlap_plot_called(self):
+        """Phase 3b 应调用 plot_topk_overlap_maps 并传入 output_prefix='dlmsf'。"""
+        source = self._read_source()
+        assert 'output_prefix="dlmsf"' in source or "output_prefix='dlmsf'" in source
+
+    def test_dlmsf_scatter_plot_called(self):
+        """Phase 3b 应调用 plot_alignment_scatter（通过 dlmsf_pairs_scatter 区分）。"""
+        source = self._read_source()
+        assert "dlmsf_pairs_scatter" in source
+
+    def test_dlmsf_iou_plot_called(self):
+        """Phase 3b 应调用 plot_topk_iou_curves（通过 dlmsf_pairs 区分）。"""
+        source = self._read_source()
+        assert "dlmsf_pairs" in source
