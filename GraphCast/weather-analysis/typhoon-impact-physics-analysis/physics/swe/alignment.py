@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import scipy.stats
 import xarray
 
 from shared.patch_scoring_utils import window_reduce_2d
+
+if TYPE_CHECKING:
+    from physics.swe.swe_sensitivity import SWESensitivityResult
 
 
 @dataclass
