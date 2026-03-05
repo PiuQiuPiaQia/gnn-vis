@@ -9,7 +9,7 @@ import unittest
 
 def _called_function_names_from_source(function_name: str) -> set[str]:
     root = Path(__file__).resolve().parents[2]
-    src_path = root / "physics" / "comparison_core.py"
+    src_path = root / "physics" / "swe" / "comparison_core.py"
     source = src_path.read_text(encoding="utf-8")
     module = ast.parse(source)
 
