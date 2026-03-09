@@ -11,7 +11,8 @@ import xarray
 
 @dataclass
 class DLMSFSensitivityResult:
-    S_map: np.ndarray            # 2D (n_lat, n_lon)
+    S_map: np.ndarray            # 2D (n_lat, n_lon), signed sensitivity
+    S_abs_map: np.ndarray        # 2D (n_lat, n_lon), absolute sensitivity
     lat_vals: np.ndarray
     lon_vals: np.ndarray
     center_lat: float
@@ -75,11 +76,14 @@ def compute_dlmsf_925_300(
     annulus_inner_km: float,
     annulus_outer_km: float,
     min_env_points: int = 10,
+    levels_bottom_hpa: float = 925.0,
+    levels_top_hpa: float = 300.0,
 ) -> Tuple[float, float]:
-    """计算 925–300 hPa 深层环境引导气流 (U_dlmsf, V_dlmsf)。
+    """计算深层环境引导气流 (U_dlmsf, V_dlmsf)。
 
-    层结选取：300 ≤ p ≤ 925 hPa（含端点）。注意：此范围比 physics/swe/steering.py
-    中的 850–300 hPa 更深，包含近地面边界层影响。
+    层结选取：levels_top_hpa ≤ p ≤ levels_bottom_hpa（含端点）。
+    默认范围为 300–925 hPa，比 physics/swe/steering.py 中的 850–300 hPa
+    更深，包含近地面边界层影响。
 
     权重：梯形压厚权重，归一化。
     环境点：距中心 annulus_inner_km–annulus_outer_km 且排除核心区域的格点。
@@ -96,6 +100,8 @@ def compute_dlmsf_925_300(
         annulus_inner_km: Inner radius of environmental annulus in km
         annulus_outer_km: Outer radius of environmental annulus in km
         min_env_points: Minimum valid env points; if below, falls back to full domain
+        levels_bottom_hpa: DLMSF 层结底层气压（hPa），默认 925
+        levels_top_hpa: DLMSF 层结顶层气压（hPa），默认 300
 
     Returns:
         (U_dlmsf, V_dlmsf) pressure-thickness weighted environmental mean winds (m/s)
@@ -119,12 +125,20 @@ def compute_dlmsf_925_300(
             f"annulus_outer_km ({annulus_outer_km}) must be greater than "
             f"annulus_inner_km ({annulus_inner_km})"
         )
+    if levels_bottom_hpa <= levels_top_hpa:
+        raise ValueError(
+            f"levels_bottom_hpa ({levels_bottom_hpa}) must be greater than "
+            f"levels_top_hpa ({levels_top_hpa})"
+        )
 
-    # 选取 300–925 hPa 层（含端点）
-    level_mask = (levels_hpa >= 300.0) & (levels_hpa <= 925.0)
+    # 选取 levels_top_hpa–levels_bottom_hPa 层（含端点）
+    # Note: bottom > top (e.g., 925 > 300)
+    level_mask = (levels_hpa >= levels_top_hpa) & (levels_hpa <= levels_bottom_hpa)
     sel_idx = np.where(level_mask)[0]
     if len(sel_idx) == 0:
-        raise ValueError("No levels found in 300–925 hPa range")
+        raise ValueError(
+            f"No levels found in {levels_top_hpa}–{levels_bottom_hpa} hPa range"
+        )
 
     u_sel = u_levels[sel_idx]
     v_sel = v_levels[sel_idx]
@@ -217,6 +231,12 @@ def _extract_uv_levels(
         u_da = u_da.isel(batch=0)
         v_da = v_da.isel(batch=0)
     if "time" in u_da.dims:
+        # DLMSF requires time[1] (initial condition at t=0h)
+        if u_da.sizes["time"] < 2:
+            raise ValueError(
+                f"{_U_VAR} 'time' dimension has {u_da.sizes['time']} slice(s); "
+                f"DLMSF requires at least 2 time slices (uses time[1])."
+            )
         u_da = u_da.isel(time=time_idx)
         v_da = v_da.isel(time=time_idx)
     if "level" not in u_da.dims:
@@ -251,9 +271,22 @@ def _build_patches(
     每个 patch 为一个布尔掩膜 (n_lat, n_lon)，覆盖 patch_size_deg × patch_size_deg 的区域。
     Patch 沿经纬度方向滑动，起点为各方向最小值，步长等于 patch_size_deg。
 
+    Args:
+        lat_vals: 1D latitude array
+        lon_vals: 1D longitude array
+        patch_size_deg: patch 尺寸（度），必须为正数
+
     Returns:
         List of boolean masks, each shape (n_lat, n_lon)
+
+    Raises:
+        ValueError: If patch_size_deg <= 0
     """
+    if patch_size_deg <= 0:
+        raise ValueError(
+            f"patch_size_deg must be positive, got {patch_size_deg}"
+        )
+
     lat_min, lat_max = float(lat_vals.min()), float(lat_vals.max())
     lon_min, lon_max = float(lon_vals.min()), float(lon_vals.max())
 
@@ -291,8 +324,10 @@ def compute_dlmsf_patch_fd(
     """有限差分 patch 扰动计算 DLMSF 敏感度图。
 
     对 ROI 划分为 patch_size_deg × patch_size_deg 的矩形 patch，对每个 patch
-    施加 +eps (m/s) 的 u/v 扰动，通过有限差分估计该 patch 对 J_phys 的贡献：
-        S_P = |J_phys_pert - J_phys_baseline| / eps
+    施加方向性扰动，通过中心差分估计该 patch 对 J_phys 的贡献：
+        plus:  u += eps*d_u, v += eps*d_v
+        minus: u -= eps*d_u, v -= eps*d_v
+        S_P = (J_plus - J_minus) / (2*eps)
 
     J_phys = DLMSF · d_hat，其中 DLMSF 为 [levels_top_hpa, levels_bottom_hpa]
     范围内的压厚加权环境引导气流向量。
@@ -315,10 +350,49 @@ def compute_dlmsf_patch_fd(
         levels_top_hpa: DLMSF 层结顶层气压（hPa），默认 300
 
     Returns:
-        DLMSFSensitivityResult 含 S_map (n_lat, n_lon)
+        DLMSFSensitivityResult 含 S_map（有符号敏度）和 S_abs_map（绝对敏度）
     """
     t0 = time.perf_counter()
     d_u, d_v = d_hat
+
+    # Validate patch_size_deg at entrypoint (fail-fast before any work)
+    if patch_size_deg <= 0:
+        raise ValueError(
+            f"patch_size_deg must be positive, got {patch_size_deg}"
+        )
+
+    # Validate eps (must be positive for finite differences)
+    if eps <= 0:
+        raise ValueError(
+            f"eps must be positive for finite differences, got {eps}"
+        )
+
+    # Normalize d_hat to unit vector (if non-zero)
+    # Store the normalized d_hat for use in result
+    d_mag = math.hypot(d_u, d_v)
+    if d_mag > 1e-10:
+        d_u = d_u / d_mag
+        d_v = d_v / d_mag
+    # Store normalized (or zero) vector for result
+    d_hat_normalized = (d_u, d_v)
+
+    # d_hat 为零向量时，J 恒为 0，S_map 全零
+    # CHECK ZERO d_hat BEFORE NaN-baseline check (short-circuit priority)
+    if abs(d_u) < 1e-10 and abs(d_v) < 1e-10:
+        # 提取 u/v 多层场仅用于获取 lat_vals/lon_vals 形状验证
+        # 零 d_hat 无需实际风场数据即可返回结果
+        elapsed = time.perf_counter() - t0
+        patches = _build_patches(lat_vals, lon_vals, patch_size_deg)
+        S_map = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
+        return DLMSFSensitivityResult(
+            S_map=S_map, S_abs_map=np.abs(S_map),
+            lat_vals=lat_vals, lon_vals=lon_vals,
+            center_lat=center_lat, center_lon=center_lon,
+            target_time_idx=target_time_idx,
+            d_hat=d_hat_normalized, J_phys_baseline=0.0,
+            U_dlmsf=0.0, V_dlmsf=0.0,  # Zero d_hat means no meaningful DLMSF direction
+            n_patches=len(patches), elapsed_sec=elapsed,
+        )
 
     # 提取 u/v 多层场
     u_base, v_base, levels = _extract_uv_levels(eval_inputs, lat_vals, lon_vals, time_idx=1)
@@ -330,6 +404,8 @@ def compute_dlmsf_patch_fd(
         core_radius_deg=core_radius_deg,
         annulus_inner_km=annulus_inner_km,
         annulus_outer_km=annulus_outer_km,
+        levels_bottom_hpa=levels_bottom_hpa,
+        levels_top_hpa=levels_top_hpa,
     )
     J0 = float(U0) * d_u + float(V0) * d_v
     
@@ -338,48 +414,56 @@ def compute_dlmsf_patch_fd(
               "Returning zero S_map.")
         elapsed = time.perf_counter() - t0
         patches = _build_patches(lat_vals, lon_vals, patch_size_deg)
+        S_map = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
         return DLMSFSensitivityResult(
-            S_map=S_map, lat_vals=lat_vals, lon_vals=lon_vals,
+            S_map=S_map, S_abs_map=np.abs(S_map),
+            lat_vals=lat_vals, lon_vals=lon_vals,
             center_lat=center_lat, center_lon=center_lon,
             target_time_idx=target_time_idx,
-            d_hat=d_hat, J_phys_baseline=float("nan"),
+            d_hat=d_hat_normalized, J_phys_baseline=float("nan"),
             U_dlmsf=float(U0), V_dlmsf=float(V0),
             n_patches=len(patches), elapsed_sec=elapsed,
         )
 
     S_map = np.zeros((len(lat_vals), len(lon_vals)), dtype=np.float64)
 
-    # d_hat 为零向量时，J 恒为 0，S_map 全零
-    if abs(d_u) < 1e-10 and abs(d_v) < 1e-10:
-        elapsed = time.perf_counter() - t0
-        patches = _build_patches(lat_vals, lon_vals, patch_size_deg)
-        return DLMSFSensitivityResult(
-            S_map=S_map, lat_vals=lat_vals, lon_vals=lon_vals,
-            center_lat=center_lat, center_lon=center_lon,
-            target_time_idx=target_time_idx,
-            d_hat=d_hat, J_phys_baseline=0.0,
-            U_dlmsf=float(U0) if not math.isnan(U0) else 0.0,
-            V_dlmsf=float(V0) if not math.isnan(V0) else 0.0,
-            n_patches=len(patches), elapsed_sec=elapsed,
-        )
-
     # 构建 patch 列表并逐 patch 有限差分
     patches = _build_patches(lat_vals, lon_vals, patch_size_deg)
     for mask in patches:
-        u_pert = u_base.copy()
-        v_pert = v_base.copy()
-        # 对所有层的该 patch 区域同时施加 +eps 扰动
-        u_pert[:, mask] += eps
-        v_pert[:, mask] += eps
+        # Plus perturbation: u += eps*d_u, v += eps*d_v
+        u_plus = u_base.copy()
+        v_plus = v_base.copy()
+        u_plus[:, mask] += eps * d_u
+        v_plus[:, mask] += eps * d_v
         U_p, V_p = compute_dlmsf_925_300(
-            u_pert, v_pert, levels, lat_vals, lon_vals,
+            u_plus, v_plus, levels, lat_vals, lon_vals,
             center_lat, center_lon,
             core_radius_deg=core_radius_deg,
             annulus_inner_km=annulus_inner_km,
             annulus_outer_km=annulus_outer_km,
+            levels_bottom_hpa=levels_bottom_hpa,
+            levels_top_hpa=levels_top_hpa,
         )
-        J_p = float(U_p) * d_u + float(V_p) * d_v
-        S_P = abs(J_p - J0) / eps
+        J_plus = float(U_p) * d_u + float(V_p) * d_v
+
+        # Minus perturbation: u -= eps*d_u, v -= eps*d_v
+        u_minus = u_base.copy()
+        v_minus = v_base.copy()
+        u_minus[:, mask] -= eps * d_u
+        v_minus[:, mask] -= eps * d_v
+        U_m, V_m = compute_dlmsf_925_300(
+            u_minus, v_minus, levels, lat_vals, lon_vals,
+            center_lat, center_lon,
+            core_radius_deg=core_radius_deg,
+            annulus_inner_km=annulus_inner_km,
+            annulus_outer_km=annulus_outer_km,
+            levels_bottom_hpa=levels_bottom_hpa,
+            levels_top_hpa=levels_top_hpa,
+        )
+        J_minus = float(U_m) * d_u + float(V_m) * d_v
+
+        # Central difference: S_P = (J_plus - J_minus) / (2*eps)
+        S_P = (J_plus - J_minus) / (2.0 * eps)
         S_map[mask] = S_P
 
     elapsed = time.perf_counter() - t0
@@ -390,10 +474,11 @@ def compute_dlmsf_patch_fd(
     )
 
     return DLMSFSensitivityResult(
-        S_map=S_map, lat_vals=lat_vals, lon_vals=lon_vals,
+        S_map=S_map, S_abs_map=np.abs(S_map),
+        lat_vals=lat_vals, lon_vals=lon_vals,
         center_lat=center_lat, center_lon=center_lon,
         target_time_idx=target_time_idx,
-        d_hat=d_hat, J_phys_baseline=float(J0),
+        d_hat=d_hat_normalized, J_phys_baseline=float(J0),
         U_dlmsf=float(U0), V_dlmsf=float(V0),
         n_patches=n_patches, elapsed_sec=elapsed,
     )

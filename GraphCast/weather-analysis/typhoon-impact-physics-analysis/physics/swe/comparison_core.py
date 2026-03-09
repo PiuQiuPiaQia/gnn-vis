@@ -151,6 +151,12 @@ def _compute_deep_layer_steering_from_eval_inputs(
     center_lat: float,
     center_lon: float,
 ) -> Optional[Dict[str, float]]:
+    if "u_component_of_wind" in eval_inputs:
+        u_time_da = eval_inputs["u_component_of_wind"]
+        if "time" in u_time_da.dims and int(u_time_da.sizes.get("time", 0)) < 2:
+            print("  [warn] Deep-layer steering unavailable: time dim has fewer than 2 steps; falling back to single-level steering.")
+            return None
+
     try:
         u_da = eval_inputs["u_component_of_wind"]
         v_da = eval_inputs["v_component_of_wind"]
@@ -158,6 +164,8 @@ def _compute_deep_layer_steering_from_eval_inputs(
             u_da = u_da.isel(batch=0)
             v_da = v_da.isel(batch=0)
         if "time" in u_da.dims:
+            if int(u_da.sizes.get("time", 0)) < 2:
+                raise ValueError("Deep-layer steering requires at least 2 time steps when time dim is present")
             u_da = u_da.isel(time=1)
             v_da = v_da.isel(time=1)
         if "level" not in u_da.dims:
@@ -217,13 +225,22 @@ def _compute_gnn_ig_for_swe_vars(
     context,
     runtime_cfg: AnalysisConfig,
     baseline_inputs: xarray.Dataset,
+    allowed_variables: Optional[set[str]] = None,
 ) -> Dict[str, np.ndarray]:
     vars_to_use = [v for v in _SWE_COMPARABLE_VARS if v in context.eval_inputs.data_vars]
+    if allowed_variables is not None:
+        vars_to_use = [v for v in vars_to_use if v in allowed_variables]
     if not vars_to_use:
+        if allowed_variables is not None:
+            return {}
         raise ValueError("SWE 可比变量（geopotential/u/v）均不在 eval_inputs 中")
 
     def _loss(inputs_data):
         return target_scalar(context, runtime_cfg, inputs_data, context.target_var)
+
+    ig_steps = int(runtime_cfg.gradient_steps)
+    if ig_steps <= 0:
+        raise ValueError(f"gradient_steps must be positive, got {ig_steps}")
 
     grad_fn = jax.grad(_loss)
 
@@ -233,7 +250,6 @@ def _compute_gnn_ig_for_swe_vars(
     }
     ig_sum = {v: np.zeros_like(diff_arrays[v], dtype=np.float64) for v in vars_to_use}
 
-    ig_steps = runtime_cfg.gradient_steps
     print(f"[GNN-IG] Computing IG for {len(vars_to_use)} SWE-comparable vars ({ig_steps} steps)...")
     for step in range(ig_steps):
         alpha = (step + 0.5) / float(ig_steps)
@@ -258,7 +274,7 @@ def _compute_gnn_ig_for_swe_vars(
             original_da=context.eval_inputs[v],
             runtime_cfg=runtime_cfg,
         )
-        ig_maps[v] = np.abs(np.asarray(ig_da.values, dtype=np.float64))
+        ig_maps[v] = np.asarray(ig_da.values, dtype=np.float64)
 
     return ig_maps
 
@@ -275,13 +291,13 @@ def _crop_gnn_to_swe_domain(
     return gnn_map_full[np.ix_(lat_idx, lon_idx)]
 
 
-def _build_gnn_group_maps(
+def _build_gnn_group_maps_split(
     gnn_ig_raw: Dict[str, np.ndarray],
     full_lat: np.ndarray,
     full_lon: np.ndarray,
     swe_lat: np.ndarray,
     swe_lon: np.ndarray,
-) -> Dict[str, np.ndarray]:
+) -> tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     def _crop(var: str) -> Optional[np.ndarray]:
         if var not in gnn_ig_raw:
             return None
@@ -291,17 +307,173 @@ def _build_gnn_group_maps(
     u_map  = _crop("u_component_of_wind")
     v_map  = _crop("v_component_of_wind")
 
-    out: Dict[str, np.ndarray] = {}
+    signed_out: Dict[str, np.ndarray] = {}
+    magnitude_out: Dict[str, np.ndarray] = {}
     if z_map is not None:
-        out["z_500"] = z_map
+        signed_out["z_500"] = z_map
+        magnitude_out["z_500"] = np.abs(z_map)
     if u_map is not None and v_map is not None:
-        out["uv_500"] = np.sqrt(u_map ** 2 + v_map ** 2)
-    elif u_map is not None:
-        out["uv_500"] = u_map
-    elif v_map is not None:
-        out["uv_500"] = v_map
+        magnitude_out["uv_500"] = np.sqrt(u_map ** 2 + v_map ** 2)
 
-    return out
+    return signed_out, magnitude_out
+
+
+def _resolve_allowed_swe_ig_variables(
+    eval_inputs: xarray.Dataset,
+    runtime_cfg: AnalysisConfig,
+    target_var: str,
+) -> set[str]:
+    return set(
+        _resolve_spatial_variables(
+            eval_inputs=eval_inputs,
+            perturb_variables=runtime_cfg.perturb_variables,
+            target_var=target_var,
+            include_target_inputs=runtime_cfg.include_target_inputs,
+        )
+    )
+
+
+def _resolve_allowed_swe_comparable_ig_variables(
+    eval_inputs: xarray.Dataset,
+    runtime_cfg: AnalysisConfig,
+    target_var: str,
+) -> set[str]:
+    return {
+        var_name
+        for var_name in _resolve_allowed_swe_ig_variables(eval_inputs, runtime_cfg, target_var)
+        if var_name in _SWE_COMPARABLE_VARS and var_name in eval_inputs.data_vars
+    }
+
+
+def _build_gnn_group_map_payload(
+    signed_gnn_maps: Dict[str, np.ndarray],
+    magnitude_gnn_maps: Dict[str, np.ndarray],
+) -> Dict[str, Dict[str, np.ndarray]]:
+    # `gnn_ig_maps` remains the backward-compatible all-magnitude grouped view.
+    return {
+        "gnn_main_maps": signed_gnn_maps,
+        "gnn_ig_maps": magnitude_gnn_maps,
+        "gnn_ig_magnitude_maps": magnitude_gnn_maps,
+    }
+
+
+def _build_comparison_result_payload(
+    *,
+    jax_result: Any,
+    signed_gnn_maps: Dict[str, np.ndarray],
+    magnitude_gnn_maps: Dict[str, np.ndarray],
+    report: AlignmentReport,
+    dlmsf_result: Any,
+    dlmsf_report: Any,
+    sweep_rows: List[Dict[str, float]],
+    ig_sanity_payload: Dict[str, Any],
+    elapsed: float,
+) -> Dict[str, Any]:
+    result = {
+        "jax_result": jax_result,
+        "report": report,
+        "dlmsf_result": dlmsf_result,
+        "dlmsf_report": dlmsf_report,
+        "upstream_fraction_series": [
+            float(r["upstream_fraction"])
+            for r in sweep_rows
+            if np.isfinite(float(r["upstream_fraction"]))
+        ],
+        "ig_sanity": ig_sanity_payload,
+        "elapsed_sec": elapsed,
+    }
+    result.update(_build_gnn_group_map_payload(signed_gnn_maps, magnitude_gnn_maps))
+    return result
+
+
+def _should_emit_alignment_scatter(
+    scatter_pairs: List[tuple[str, np.ndarray, str, str, str]],
+) -> bool:
+    return bool(scatter_pairs)
+
+
+def _should_emit_topk_artifacts(
+    pairs: List[tuple[str, np.ndarray, str]],
+) -> bool:
+    return bool(pairs)
+
+
+def _build_dlmsf_alignment_inputs(
+    dlmsf_result: Any,
+    signed_gnn_maps: Dict[str, np.ndarray],
+    magnitude_gnn_maps: Dict[str, np.ndarray],
+) -> Dict[str, Any]:
+    main_specs: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    if "z_500" in signed_gnn_maps:
+        main_specs.append(
+            {
+                "group_name": "dlmsf_z_500",
+                "gnn_key": "z_500",
+                "s_map": dlmsf_result.S_map,
+                "gnn_map": signed_gnn_maps["z_500"],
+                "xlabel": "DLMSF $S$",
+                "ylabel": "GNN IG (signed z₅₀₀)",
+            }
+        )
+
+    if "uv_500" in magnitude_gnn_maps and "uv_500" not in signed_gnn_maps:
+        warnings.append(
+            "Signed DLMSF main comparison for uv_500 skipped: only magnitude GNN uv_500 is available."
+        )
+
+    overlap_pairs = [
+        ("z", dlmsf_result.S_abs_map, "z_500")
+        for _ in [0]
+        if "z_500" in magnitude_gnn_maps
+    ]
+    if "uv_500" in magnitude_gnn_maps:
+        overlap_pairs.append(("uv", dlmsf_result.S_abs_map, "uv_500"))
+
+    return {
+        "main_specs": main_specs,
+        "scatter_pairs": [
+            (spec["group_name"], spec["s_map"], spec["gnn_key"], spec["xlabel"], spec["ylabel"])
+            for spec in main_specs
+        ],
+        "overlap_pairs": overlap_pairs,
+        "warnings": warnings,
+    }
+
+
+def _build_swe_alignment_inputs(
+    swe_result: Any,
+    signed_gnn_maps: Dict[str, np.ndarray],
+    magnitude_gnn_maps: Dict[str, np.ndarray],
+) -> Dict[str, Any]:
+    warnings: List[str] = []
+    main_pairs_metrics: List[tuple[str, np.ndarray, str]] = []
+    main_pairs_scatter: List[tuple[str, np.ndarray, str, str, str]] = []
+
+    if "z_500" in signed_gnn_maps:
+        main_pairs_metrics.append(("h", swe_result.S_h, "z_500"))
+        main_pairs_scatter.append(("h", swe_result.S_h, "z_500", "SWE $S_h$", "GNN IG (signed z₅₀₀)"))
+
+    if "uv_500" in magnitude_gnn_maps and "uv_500" not in signed_gnn_maps:
+        warnings.append(
+            "Signed SWE main comparison for uv_500 skipped: only magnitude GNN uv_500 is available."
+        )
+
+    overlap_pairs: List[tuple[str, np.ndarray, str]] = []
+    if "z_500" in magnitude_gnn_maps:
+        overlap_pairs.append(("h", swe_result.S_h, "z_500"))
+    if "uv_500" in magnitude_gnn_maps:
+        overlap_pairs.append(("uv", swe_result.S_uv, "uv_500"))
+
+    return {
+        "main_gnn_maps": signed_gnn_maps,
+        "supplemental_gnn_maps": magnitude_gnn_maps,
+        "main_pairs_metrics": main_pairs_metrics,
+        "main_pairs_scatter": main_pairs_scatter,
+        "overlap_pairs": overlap_pairs,
+        "warnings": warnings,
+    }
 
 
 def run_physics_comparison() -> Dict[str, Any]:
@@ -314,16 +486,20 @@ def run_physics_comparison() -> Dict[str, Any]:
     runtime_cfg = AnalysisConfig.from_module(cfg)
     context = build_analysis_context(runtime_cfg)
 
-    vars_all = _resolve_spatial_variables(
+    vars_all = _resolve_allowed_swe_ig_variables(
         eval_inputs=context.eval_inputs,
-        perturb_variables=runtime_cfg.perturb_variables,
+        runtime_cfg=runtime_cfg,
         target_var=context.target_var,
-        include_target_inputs=runtime_cfg.include_target_inputs,
+    )
+    allowed_swe_comparable_ig_vars = _resolve_allowed_swe_comparable_ig_variables(
+        eval_inputs=context.eval_inputs,
+        runtime_cfg=runtime_cfg,
+        target_var=context.target_var,
     )
     _, mean_by_level, _ = load_normalization_stats(runtime_cfg.dir_path_stats)
     baseline_inputs = _build_climatology_baseline_inputs(
         eval_inputs=context.eval_inputs,
-        vars_to_use=vars_all,
+        vars_to_use=sorted(vars_all),
         mean_by_level=mean_by_level,
     )
 
@@ -477,8 +653,17 @@ def run_physics_comparison() -> Dict[str, Any]:
         print("  DLMSF_ENABLE=False, skipped.")
 
     print("\n[Phase 2] GNN IG for SWE-comparable vars (geopotential, u, v @ 500hPa)")
-    gnn_ig_raw = _compute_gnn_ig_for_swe_vars(context, runtime_cfg, baseline_inputs)
-    print(f"  GNN IG computed for: {list(gnn_ig_raw.keys())}")
+    if allowed_swe_comparable_ig_vars:
+        gnn_ig_raw = _compute_gnn_ig_for_swe_vars(
+            context,
+            runtime_cfg,
+            baseline_inputs,
+            allowed_variables=allowed_swe_comparable_ig_vars,
+        )
+        print(f"  GNN IG computed for: {list(gnn_ig_raw.keys())}")
+    else:
+        gnn_ig_raw = {}
+        print("  [warn] No allowed SWE-comparable vars after filtering; skipping GNN IG and alignment tracks.")
 
     # Resolve patch parameters early for IG sanity check
     patch_radius = getattr(cfg, "PHYSICS_PATCH_RADIUS", runtime_cfg.patch_radius)
@@ -487,7 +672,17 @@ def run_physics_comparison() -> Dict[str, Any]:
     # Run IG sanity check if enabled
     ig_sanity_payload: Dict[str, Any] = {"status": "skipped", "reason": "disabled", "passed": None}
     sanity_path = RESULTS_DIR / "ig_sanity_metrics.json"
-    if runtime_cfg.ig_sanity_enable:
+    if not gnn_ig_raw:
+        from physics.swe.ig_sanity import write_ig_sanity_report
+
+        ig_sanity_payload = {
+            "status": "skipped",
+            "reason": "no_swe_comparable_vars",
+            "passed": None,
+        }
+        sanity_path.parent.mkdir(parents=True, exist_ok=True)
+        write_ig_sanity_report(ig_sanity_payload, sanity_path)
+    elif runtime_cfg.ig_sanity_enable:
         print("\n[Phase 2b] IG Perturbation Sanity Check")
         from physics.swe.ig_sanity import run_ig_perturb_sanity, write_ig_sanity_report
         ig_sanity_payload = run_ig_perturb_sanity(
@@ -512,58 +707,78 @@ def run_physics_comparison() -> Dict[str, Any]:
         sanity_path.parent.mkdir(parents=True, exist_ok=True)
         write_ig_sanity_report(ig_sanity_payload, sanity_path)
 
-    gnn_ig_maps = _build_gnn_group_maps(gnn_ig_raw, full_lat, full_lon, swe_lat, swe_lon)
+    gnn_signed_maps, gnn_ig_maps = _build_gnn_group_maps_split(
+        gnn_ig_raw, full_lat, full_lon, swe_lat, swe_lon,
+    )
     print(f"  Grouped maps: {list(gnn_ig_maps.keys())}")
 
     print("\n[Phase 3] Alignment Metrics")
     patch_agg = patch_score_agg  # alias for consistency
     k_values = tuple(getattr(cfg, "PHYSICS_TOPK_VALUES", [20, 50, 100, 200]))
 
-    report = compute_alignment_report(
-        swe_result=jax_result,
-        gnn_ig_maps=gnn_ig_maps,
+    swe_alignment_inputs = _build_swe_alignment_inputs(jax_result, gnn_signed_maps, gnn_ig_maps)
+    for msg in swe_alignment_inputs["warnings"]:
+        print(f"  [warn] {msg}")
+
+    report = AlignmentReport(
+        target_time_idx=t_idx,
+        lead_time_h=lead_h,
         patch_radius=patch_radius,
         patch_score_agg=patch_agg,
         sigma_deg=sigma_deg,
-        k_values=k_values,
     )
+    for group_name, swe_map, gnn_key in swe_alignment_inputs["main_pairs_metrics"]:
+        m = _group_metrics(
+            swe_map,
+            swe_alignment_inputs["main_gnn_maps"][gnn_key],
+            group_name=group_name,
+            patch_radius=patch_radius,
+            patch_score_agg=patch_agg,
+            k_values=k_values,
+        )
+        report.groups.append(m)
+        print(f"  [Align] {group_name:6s}: ρ={m.spearman_rho:+.3f}  "
+              f"IoU@50={m.topk_iou.get(50, float('nan')):.3f}  n={m.n_valid}")
 
     print("\n[Phase 4] Saving Visualizations")
     dpi = getattr(cfg, "PHYSICS_HEATMAP_DPI", runtime_cfg.heatmap_dpi)
     panel_topk_overlap_k = int(getattr(cfg, "SWE_PANEL_TOPK_OVERLAP_K", 50))
 
-    swe_pairs = [("h", jax_result.S_h, "z_500"), ("uv", jax_result.S_uv, "uv_500")]
-    plot_topk_overlap_maps(
-        swe_pairs, gnn_ig_maps,
-        np.asarray(jax_result.lat_vals, dtype=np.float64),
-        np.asarray(jax_result.lon_vals, dtype=np.float64),
-        float(jax_result.center_lat), float(jax_result.center_lon),
-        target_time_idx=t_idx,
-        output_dir=RESULTS_DIR,
-        output_prefix="swe",
-        dpi=dpi,
-        patch_radius=patch_radius,
-        patch_score_agg=patch_agg,
-        topk_overlap_k=panel_topk_overlap_k,
-    )
+    swe_pairs = swe_alignment_inputs["overlap_pairs"]
+    if _should_emit_topk_artifacts(swe_pairs):
+        plot_topk_overlap_maps(
+            swe_pairs, gnn_ig_maps,
+            np.asarray(jax_result.lat_vals, dtype=np.float64),
+            np.asarray(jax_result.lon_vals, dtype=np.float64),
+            float(jax_result.center_lat), float(jax_result.center_lon),
+            target_time_idx=t_idx,
+            output_dir=RESULTS_DIR,
+            output_prefix="swe",
+            dpi=dpi,
+            patch_radius=patch_radius,
+            patch_score_agg=patch_agg,
+            topk_overlap_k=panel_topk_overlap_k,
+        )
+    else:
+        print("  [warn] SWE magnitude overlap/IoU track is empty, skipping top-k artifacts.")
 
-    swe_pairs_scatter = [
-        ("h",  jax_result.S_h,  "z_500",  "SWE $S_h$",    "GNN IG (z₅₀₀)"),
-        ("uv", jax_result.S_uv, "uv_500", "SWE $S_{uv}$", "GNN IG (uv magnitude)"),
-    ]
-    plot_alignment_scatter(
-        swe_pairs_scatter, gnn_ig_maps, report,
-        target_time_idx=t_idx, lead_time_h=lead_h,
-        output_dir=RESULTS_DIR, output_prefix="swe",
-        patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
-    )
+    if _should_emit_alignment_scatter(swe_alignment_inputs["main_pairs_scatter"]):
+        plot_alignment_scatter(
+            swe_alignment_inputs["main_pairs_scatter"], swe_alignment_inputs["main_gnn_maps"], report,
+            target_time_idx=t_idx, lead_time_h=lead_h,
+            output_dir=RESULTS_DIR, output_prefix="swe",
+            patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+        )
+    else:
+        print("  [warn] SWE signed main comparison is empty, skipping scatter artifact.")
 
-    plot_topk_iou_curves(
-        swe_pairs, gnn_ig_maps,
-        target_time_idx=t_idx, lead_time_h=lead_h,
-        output_dir=RESULTS_DIR, output_prefix="swe",
-        k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
-    )
+    if _should_emit_topk_artifacts(swe_pairs):
+        plot_topk_iou_curves(
+            swe_pairs, gnn_ig_maps,
+            target_time_idx=t_idx, lead_time_h=lead_h,
+            output_dir=RESULTS_DIR, output_prefix="swe",
+            k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+        )
 
     json_path = RESULTS_DIR / "physics_alignment_metrics.json"
     save_report_json(report, json_path)
@@ -571,6 +786,9 @@ def run_physics_comparison() -> Dict[str, Any]:
     print("\n[Phase 3b] DLMSF vs IG Alignment")
     dlmsf_report = None
     if dlmsf_result is not None:
+        dlmsf_inputs = _build_dlmsf_alignment_inputs(dlmsf_result, gnn_signed_maps, gnn_ig_maps)
+        for msg in dlmsf_inputs["warnings"]:
+            print(f"  [warn] {msg}")
         dlmsf_report = AlignmentReport(
             target_time_idx=t_idx,
             lead_time_h=lead_h,
@@ -578,30 +796,37 @@ def run_physics_comparison() -> Dict[str, Any]:
             patch_score_agg=patch_agg,
             sigma_deg=0.0,
         )
-        for gnn_key in ["z_500", "uv_500"]:
-            if gnn_key not in gnn_ig_maps:
-                continue
+        for spec in dlmsf_inputs["main_specs"]:
             m = _group_metrics(
-                dlmsf_result.S_map,
-                gnn_ig_maps[gnn_key],
-                group_name=f"dlmsf_{gnn_key}",
+                spec["s_map"],
+                spec["gnn_map"],
+                group_name=spec["group_name"],
                 patch_radius=patch_radius,
                 patch_score_agg=patch_agg,
                 k_values=k_values,
             )
             dlmsf_report.groups.append(m)
-            print(f"  [DLMSF Align] {gnn_key}: ρ={m.spearman_rho:+.3f}  "
-                  f"IoU@50={m.topk_iou.get(50, float('nan')):.3f}  n={m.n_valid}")
+            print(f"  [DLMSF Align] {spec['gnn_key']}: ρ={m.spearman_rho:+.3f}  "
+                   f"IoU@50={m.topk_iou.get(50, float('nan')):.3f}  n={m.n_valid}")
         dlmsf_json_path = RESULTS_DIR / "dlmsf_alignment_metrics.json"
         if dlmsf_report.groups:
             save_report_json(dlmsf_report, dlmsf_json_path)
 
+            if _should_emit_alignment_scatter(dlmsf_inputs["scatter_pairs"]):
+                plot_alignment_scatter(
+                    dlmsf_inputs["scatter_pairs"], gnn_signed_maps, dlmsf_report,
+                    target_time_idx=t_idx, lead_time_h=lead_h,
+                    output_dir=RESULTS_DIR, output_prefix="dlmsf",
+                    patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+                )
+
+        else:
+            print("  [warn] DLMSF 对齐组为空（gnn_ig_maps 中无匹配 key），跳过写出报告")
+
+        if dlmsf_inputs["overlap_pairs"]:
             # --- DLMSF 对比可视化 ---
-            # DLMSF 只有一张综合敏感度图（不区分 h/uv），对 z_500 和 uv_500 分别做对比
-            dlmsf_pairs = [
-                ("z",  dlmsf_result.S_map, "z_500"),
-                ("uv", dlmsf_result.S_map, "uv_500"),
-            ]
+            # 主对比保留 signed 路径；重叠/IoU 显式使用 magnitude 轨道。
+            dlmsf_pairs = dlmsf_inputs["overlap_pairs"]
             plot_topk_overlap_maps(
                 dlmsf_pairs, gnn_ig_maps,
                 swe_lat, swe_lon,
@@ -615,25 +840,12 @@ def run_physics_comparison() -> Dict[str, Any]:
                 topk_overlap_k=panel_topk_overlap_k,
             )
 
-            dlmsf_pairs_scatter = [
-                ("dlmsf_z_500",  dlmsf_result.S_map, "z_500",  "DLMSF $S$", "GNN IG (z₅₀₀)"),
-                ("dlmsf_uv_500", dlmsf_result.S_map, "uv_500", "DLMSF $S$", "GNN IG (uv magnitude)"),
-            ]
-            plot_alignment_scatter(
-                dlmsf_pairs_scatter, gnn_ig_maps, dlmsf_report,
-                target_time_idx=t_idx, lead_time_h=lead_h,
-                output_dir=RESULTS_DIR, output_prefix="dlmsf",
-                patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
-            )
-
             plot_topk_iou_curves(
                 dlmsf_pairs, gnn_ig_maps,
                 target_time_idx=t_idx, lead_time_h=lead_h,
                 output_dir=RESULTS_DIR, output_prefix="dlmsf",
                 k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
             )
-        else:
-            print("  [warn] DLMSF 对齐组为空（gnn_ig_maps 中无匹配 key），跳过写出报告")
     else:
         print("  DLMSF result unavailable, skipped.")
 
@@ -641,16 +853,17 @@ def run_physics_comparison() -> Dict[str, Any]:
     print(f"\n=== Done in {elapsed:.1f}s ===")
     print(f"Results saved to: {RESULTS_DIR}/")
 
-    return {
-        "jax_result": jax_result,
-        "gnn_ig_maps": gnn_ig_maps,
-        "report": report,
-        "dlmsf_result": dlmsf_result,     # 新增
-        "dlmsf_report": dlmsf_report,     # 新增
-        "upstream_fraction_series": [float(r["upstream_fraction"]) for r in sweep_rows if np.isfinite(float(r["upstream_fraction"]))],
-        "ig_sanity": ig_sanity_payload,
-        "elapsed_sec": elapsed,
-    }
+    return _build_comparison_result_payload(
+        jax_result=jax_result,
+        signed_gnn_maps=gnn_signed_maps,
+        magnitude_gnn_maps=gnn_ig_maps,
+        report=report,
+        dlmsf_result=dlmsf_result,
+        dlmsf_report=dlmsf_report,
+        sweep_rows=sweep_rows,
+        ig_sanity_payload=ig_sanity_payload,
+        elapsed=elapsed,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:

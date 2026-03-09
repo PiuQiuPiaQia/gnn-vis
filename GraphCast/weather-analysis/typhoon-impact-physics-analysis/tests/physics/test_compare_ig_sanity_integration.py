@@ -111,33 +111,36 @@ class TestWriteIgSanityReportSanitization:
         assert "Infinity" not in raw_text
 
 
-class TestComparisonCoreIgSanityPassthrough:
-    """Tests for comparison_core passing through IG sanity results."""
+class TestComparisonResultPayloadAndIgSanityArtifacts:
+    """Tests for comparison payload helpers and IG sanity artifact writing."""
 
-    def test_run_physics_comparison_includes_ig_sanity_key(self):
-        """run_physics_comparison return dict should include ig_sanity key."""
-        # This is a lightweight stub test - we mock the heavy parts
-        # and verify the ig_sanity payload is passed through correctly
-        
-        # Expected keys in the return value
-        expected_keys = [
+    def test_result_payload_helper_keeps_backward_compatible_and_explicit_gnn_keys(self):
+        """comparison_core payload helper should keep legacy key and add explicit magnitude key."""
+        from physics.swe.comparison_core import _build_comparison_result_payload
+
+        signed_maps = {"z_500": np.array([[1.0]])}
+        magnitude_maps = {"z_500": np.array([[1.0]]), "uv_500": np.array([[2.0]])}
+
+        result = _build_comparison_result_payload(
+            jax_result=MagicMock(),
+            signed_gnn_maps=signed_maps,
+            magnitude_gnn_maps=magnitude_maps,
+            report=MagicMock(),
+            dlmsf_result=MagicMock(),
+            dlmsf_report=MagicMock(),
+            sweep_rows=[
+                {"upstream_fraction": 0.25},
+                {"upstream_fraction": float("nan")},
+            ],
+            ig_sanity_payload={"status": "ok", "passed": True},
+            elapsed=1.5,
+        )
+
+        expected_keys = {
             "jax_result",
             "gnn_ig_maps",
-            "report",
-            "dlmsf_result",
-            "dlmsf_report",
-            "upstream_fraction_series",
-            "ig_sanity",
-            "elapsed_sec",
-        ]
-        
-        # The actual comparison_core.py includes all these keys
-        # This test documents the expected contract
-        # A full integration test would require running the pipeline
-        # which is too heavy for unit tests
-        assert set(expected_keys) == {
-            "jax_result",
-            "gnn_ig_maps",
+            "gnn_ig_magnitude_maps",
+            "gnn_main_maps",
             "report",
             "dlmsf_result",
             "dlmsf_report",
@@ -145,9 +148,14 @@ class TestComparisonCoreIgSanityPassthrough:
             "ig_sanity",
             "elapsed_sec",
         }
+        assert expected_keys <= set(result)
+        assert result["gnn_ig_maps"] is magnitude_maps
+        assert result["gnn_ig_magnitude_maps"] is magnitude_maps
+        assert result["gnn_main_maps"] is signed_maps
+        assert result["upstream_fraction_series"] == [0.25]
 
-    def test_comparison_core_disabled_ig_sanity_writes_skipped_report(self, tmp_path: Path):
-        """When ig_sanity_enable=False, should still write skipped report."""
+    def test_write_ig_sanity_report_persists_skipped_payload(self, tmp_path: Path):
+        """Skipped IG sanity payload should be persisted unchanged by the report writer."""
         from physics.swe.ig_sanity import write_ig_sanity_report
         
         # Verify the skipped payload is written correctly

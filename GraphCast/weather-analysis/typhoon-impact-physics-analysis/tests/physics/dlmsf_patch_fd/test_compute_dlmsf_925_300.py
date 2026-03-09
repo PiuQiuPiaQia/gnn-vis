@@ -98,3 +98,55 @@ class TestComputeDlmsf925300:
         # fallback 后使用全域均值，应接近 u_val=4.0
         assert abs(U - 4.0) < 0.1
         assert abs(V - 2.0) < 0.1
+
+    def test_custom_level_bounds_shallow_only(self):
+        """Custom level bounds should change which levels contribute.
+
+        Using levels_bottom_hpa=850, levels_top_hpa=500 should exclude
+        925 hPa and 300 hPa layers that would normally be included.
+        """
+        levels = np.array([925, 850, 500, 300], dtype=np.float32)
+        u = np.zeros((4, 5, 5), dtype=np.float32)
+        v = np.zeros((4, 5, 5), dtype=np.float32)
+        # Give each level a unique value to detect which are used
+        u[0] = 99.0   # 925 hPa - should be EXCLUDED (below bottom=850)
+        u[1] = 5.0    # 850 hPa - should be INCLUDED
+        u[2] = 5.0    # 500 hPa - should be INCLUDED
+        u[3] = 88.0   # 300 hPa - should be EXCLUDED (above top=500)
+        lat = np.linspace(-2, 2, 5)
+        lon = np.linspace(118, 122, 5)
+        U, V = compute_dlmsf_925_300(
+            u, v, levels, lat, lon,
+            center_lat=0.0, center_lon=120.0,
+            core_radius_deg=0.0,
+            annulus_inner_km=0.0,
+            annulus_outer_km=9999.0,
+            levels_bottom_hpa=850.0,
+            levels_top_hpa=500.0,
+        )
+        # Should be ~5.0, not ~99.0 or ~88.0
+        assert abs(U - 5.0) < 0.5, \
+            f"Expected ~5.0 from 850-500 hPa levels, got {U}"
+
+    def test_custom_level_bounds_top_only(self):
+        """Test with only upper-level data (400-200 hPa)."""
+        levels = np.array([500, 400, 300, 200], dtype=np.float32)
+        u = np.zeros((4, 5, 5), dtype=np.float32)
+        v = np.zeros((4, 5, 5), dtype=np.float32)
+        u[0] = 11.0   # 500 hPa - EXCLUDED (below bottom=400)
+        u[1] = 5.0    # 400 hPa - INCLUDED
+        u[2] = 5.0    # 300 hPa - INCLUDED
+        u[3] = 5.0    # 200 hPa - INCLUDED
+        lat = np.linspace(-2, 2, 5)
+        lon = np.linspace(118, 122, 5)
+        U, V = compute_dlmsf_925_300(
+            u, v, levels, lat, lon,
+            center_lat=0.0, center_lon=120.0,
+            core_radius_deg=0.0,
+            annulus_inner_km=0.0,
+            annulus_outer_km=9999.0,
+            levels_bottom_hpa=400.0,
+            levels_top_hpa=200.0,
+        )
+        assert abs(U - 5.0) < 0.5, \
+            f"Expected ~5.0 from 400-200 hPa levels, got {U}"

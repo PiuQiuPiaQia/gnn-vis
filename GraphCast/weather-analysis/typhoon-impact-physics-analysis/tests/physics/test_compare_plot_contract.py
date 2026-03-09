@@ -1,48 +1,50 @@
 # -*- coding: utf-8 -*-
-"""Contract tests for compare plotting artifacts."""
+"""Behavior tests for compare plotting artifact guards."""
 from __future__ import annotations
 
-import ast
-from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
+import numpy as np
 
-def _called_function_names_from_source(function_name: str) -> set[str]:
-    root = Path(__file__).resolve().parents[2]
-    src_path = root / "physics" / "swe" / "comparison_core.py"
-    source = src_path.read_text(encoding="utf-8")
-    module = ast.parse(source)
-
-    target = None
-    for node in module.body:
-        if isinstance(node, ast.FunctionDef) and node.name == function_name:
-            target = node
-            break
-    if target is None:
-        raise AssertionError(f"Function not found: {function_name}")
-
-    names: set[str] = set()
-    for node in ast.walk(target):
-        if not isinstance(node, ast.Call):
-            continue
-        if isinstance(node.func, ast.Name):
-            names.add(node.func.id)
-        elif isinstance(node.func, ast.Attribute):
-            names.add(node.func.attr)
-    return names
+from physics.swe.comparison_core import (
+    _build_dlmsf_alignment_inputs,
+    _build_swe_alignment_inputs,
+    _should_emit_alignment_scatter,
+    _should_emit_topk_artifacts,
+)
 
 
 class ComparePlotContractTest(unittest.TestCase):
-    def test_compare_pipeline_does_not_emit_standalone_swe_heatmaps(self):
-        """compare 输出应仅保留对比图，不再生成单独 SWE 热力图。"""
-        called = _called_function_names_from_source("run_physics_comparison")
-        self.assertNotIn("plot_sensitivity_heatmaps", called)
+    def test_swe_supplemental_only_path_keeps_topk_artifacts_but_skips_scatter(self):
+        swe_result = SimpleNamespace(
+            S_h=np.ones((2, 2), dtype=np.float64),
+            S_uv=np.full((2, 2), 2.0, dtype=np.float64),
+        )
 
-    def test_compare_pipeline_uses_topk_overlap_only_not_rank_panels(self):
-        """compare 输出应移除 rank/rank-comparison 面板，仅保留 Top-K 相关图。"""
-        called = _called_function_names_from_source("run_physics_comparison")
-        self.assertIn("plot_topk_overlap_maps", called)
-        self.assertNotIn("plot_comparison_panels", called)
+        inputs = _build_swe_alignment_inputs(
+            swe_result,
+            signed_gnn_maps={},
+            magnitude_gnn_maps={"uv_500": np.full((2, 2), 3.0, dtype=np.float64)},
+        )
+
+        self.assertFalse(_should_emit_alignment_scatter(inputs["main_pairs_scatter"]))
+        self.assertTrue(_should_emit_topk_artifacts(inputs["overlap_pairs"]))
+
+    def test_dlmsf_supplemental_only_path_keeps_topk_artifacts_but_skips_scatter(self):
+        dlmsf_result = SimpleNamespace(
+            S_map=np.ones((2, 2), dtype=np.float64),
+            S_abs_map=np.ones((2, 2), dtype=np.float64),
+        )
+
+        inputs = _build_dlmsf_alignment_inputs(
+            dlmsf_result,
+            signed_gnn_maps={},
+            magnitude_gnn_maps={"uv_500": np.full((2, 2), 4.0, dtype=np.float64)},
+        )
+
+        self.assertFalse(_should_emit_alignment_scatter(inputs["scatter_pairs"]))
+        self.assertTrue(_should_emit_topk_artifacts(inputs["overlap_pairs"]))
 
 
 if __name__ == "__main__":

@@ -67,7 +67,13 @@ class AlignmentReport:
         }
 
 
-def _patch(arr: np.ndarray, radius: int, agg: str) -> np.ndarray:
+def _patch_signed(arr: np.ndarray, radius: int, agg: str) -> np.ndarray:
+    """Patch aggregation that preserves sign (for correlation/scatter)."""
+    return window_reduce_2d(arr.astype(np.float64), radius, agg)
+
+
+def _patch_magnitude(arr: np.ndarray, radius: int, agg: str) -> np.ndarray:
+    """Patch aggregation using magnitude |arr| (for top-k/IoU hotspot detection)."""
     return window_reduce_2d(np.abs(arr.astype(np.float64)), radius, agg)
 
 
@@ -91,16 +97,49 @@ def _topk_mask_from_rank(rank_map: np.ndarray, k: int) -> Tuple[np.ndarray, int]
     return mask.reshape(rank.shape), actual_k
 
 
-def _topk_overlap_code(swe_score: np.ndarray, ig_score: np.ndarray, k: int) -> Tuple[np.ndarray, int]:
-    """Encode overlap map: 0 none, 1 SWE-only, 2 IG-only, 3 overlap."""
-    swe_mask, actual_k = _topk_mask_from_rank(swe_score, k)
-    ig_mask, actual_k_ig = _topk_mask_from_rank(ig_score, k)
-    actual_k = min(actual_k, actual_k_ig)
+def _topk_index_set(values: np.ndarray, k: int) -> Tuple[set[int], int]:
+    arr = np.asarray(values, dtype=np.float64).ravel()
+    n = int(arr.size)
+    actual_k = min(int(k), n)
+    if actual_k <= 0:
+        return set(), 0
+    return set(np.argsort(arr, kind="stable")[::-1][:actual_k].tolist()), actual_k
 
-    code = np.zeros(swe_mask.shape, dtype=np.int8)
+
+def _topk_overlap_code(swe_score: np.ndarray, ig_score: np.ndarray, k: int) -> Tuple[np.ndarray, int]:
+    """Encode overlap map: 0 none, 1 SWE-only, 2 IG-only, 3 overlap.
+    
+    Uses jointly-finite population consistent with compute_topk_iou.
+    Cells that are NaN in either map are excluded from top-k selection.
+    """
+    joint_finite = np.isfinite(swe_score) & np.isfinite(ig_score)
+    code = np.zeros(swe_score.shape, dtype=np.int8)
+    if not joint_finite.any():
+        return code, 0
+
+    joint_flat = joint_finite.ravel()
+    swe_flat = swe_score.ravel()
+    ig_flat = ig_score.ravel()
+    joint_idx = np.flatnonzero(joint_flat)
+    swe_joint = swe_flat[joint_idx]
+    ig_joint = ig_flat[joint_idx]
+
+    top_swe_local, actual_k = _topk_index_set(swe_joint, k)
+    top_ig_local, _ = _topk_index_set(ig_joint, k)
+    top_swe_idx = joint_idx[list(top_swe_local)] if top_swe_local else np.array([], dtype=np.int64)
+    top_ig_idx = joint_idx[list(top_ig_local)] if top_ig_local else np.array([], dtype=np.int64)
+
+    swe_mask = np.zeros(swe_flat.shape, dtype=bool)
+    ig_mask = np.zeros(ig_flat.shape, dtype=bool)
+    swe_mask[top_swe_idx] = True
+    ig_mask[top_ig_idx] = True
+    swe_mask = swe_mask.reshape(swe_score.shape)
+    ig_mask = ig_mask.reshape(ig_score.shape)
+
     code[swe_mask & (~ig_mask)] = 1
     code[(~swe_mask) & ig_mask] = 2
     code[swe_mask & ig_mask] = 3
+
     return code, actual_k
 
 
@@ -110,9 +149,10 @@ def compute_spearman(
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
 ) -> Tuple[float, float]:
+    """Compute Spearman correlation with signed-preserving preprocessing."""
     s, g = _safe_finite_pair(
-        _patch(swe_map, patch_radius, patch_score_agg),
-        _patch(gnn_map, patch_radius, patch_score_agg),
+        _patch_signed(swe_map, patch_radius, patch_score_agg),
+        _patch_signed(gnn_map, patch_radius, patch_score_agg),
     )
     if len(s) < 5:
         return np.nan, np.nan
@@ -127,8 +167,9 @@ def compute_topk_iou(
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
 ) -> Dict[int, float]:
-    s = _patch(swe_map, patch_radius, patch_score_agg)
-    g = _patch(gnn_map, patch_radius, patch_score_agg)
+    """Compute Top-K IoU with magnitude preprocessing for hotspot detection."""
+    s = _patch_magnitude(swe_map, patch_radius, patch_score_agg)
+    g = _patch_magnitude(gnn_map, patch_radius, patch_score_agg)
     s_flat = s.ravel()
     g_flat = g.ravel()
     finite = np.isfinite(s_flat) & np.isfinite(g_flat)
@@ -142,12 +183,11 @@ def compute_topk_iou(
         return result
 
     for k in k_values:
-        actual_k = min(int(k), n)
+        top_s, actual_k = _topk_index_set(s_valid, k)
+        top_g, _ = _topk_index_set(g_valid, k)
         if actual_k <= 0:
             result[k] = 0.0
             continue
-        top_s = set(np.argsort(s_valid)[::-1][:actual_k].tolist())
-        top_g = set(np.argsort(g_valid)[::-1][:actual_k].tolist())
         inter = len(top_s & top_g)
         union = len(top_s | top_g)
         result[k] = inter / union if union > 0 else 0.0
@@ -165,8 +205,8 @@ def _group_metrics(
     rho, rpval = compute_spearman(swe_map, gnn_map, patch_radius, patch_score_agg)
     iou = compute_topk_iou(swe_map, gnn_map, k_values, patch_radius, patch_score_agg)
     s, _ = _safe_finite_pair(
-        _patch(swe_map, patch_radius, patch_score_agg),
-        _patch(gnn_map, patch_radius, patch_score_agg),
+        _patch_signed(swe_map, patch_radius, patch_score_agg),
+        _patch_signed(gnn_map, patch_radius, patch_score_agg),
     )
     return GroupMetrics(
         group_name=group_name,
@@ -180,6 +220,7 @@ def _group_metrics(
 def compute_alignment_report(
     swe_result: SWESensitivityResult,
     gnn_ig_maps: Dict[str, np.ndarray],
+    gnn_main_maps: Optional[Dict[str, np.ndarray]] = None,
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
     sigma_deg: float = 3.0,
@@ -194,14 +235,27 @@ def compute_alignment_report(
         sigma_deg=sigma_deg,
     )
 
+    if gnn_main_maps is None and gnn_ig_maps:
+        raise ValueError(
+            "compute_alignment_report requires gnn_main_maps for signed alignment; "
+            "magnitude-only gnn_ig_maps are not sufficient"
+        )
+
+    signed_maps = gnn_main_maps or {}
+    if "z_500" in gnn_ig_maps and "z_500" not in signed_maps:
+        raise ValueError(
+            "compute_alignment_report requires signed z_500 in gnn_main_maps"
+        )
     pairs = [
-        ("h",     swe_result.S_h,     "z_500"),
-        ("uv",    swe_result.S_uv,    "uv_500"),
+        ("h", swe_result.S_h, "z_500", signed_maps, "signed z_500"),
+        ("uv", swe_result.S_uv, "uv_500", signed_maps, "signed uv_500"),
     ]
-    for group_name, swe_map, gnn_key in pairs:
-        if gnn_key not in gnn_ig_maps:
+    for group_name, swe_map, gnn_key, source_maps, required_desc in pairs:
+        if gnn_key not in source_maps:
+            if gnn_key in gnn_ig_maps:
+                print(f"  [Align] skip {group_name}: requires {required_desc}, got magnitude-only map")
             continue
-        m = _group_metrics(swe_map, gnn_ig_maps[gnn_key],
+        m = _group_metrics(swe_map, source_maps[gnn_key],
                            group_name, patch_radius, patch_score_agg, k_values)
         report.groups.append(m)
         print(f"  [Align] {group_name:6s}: ρ={m.spearman_rho:+.3f}  "
@@ -239,8 +293,10 @@ def plot_topk_overlap_maps(
     for group_tag, S_map, gnn_key in pairs:
         if gnn_key not in gnn_ig_maps:
             continue
-        gnn_arr = _patch(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
-        overlap_code, actual_k = _topk_overlap_code(S_map, gnn_arr, topk_overlap_k)
+        # Use magnitude preprocessing for top-k overlap detection
+        swe_arr = _patch_magnitude(S_map, patch_radius, patch_score_agg)
+        gnn_arr = _patch_magnitude(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
+        overlap_code, actual_k = _topk_overlap_code(swe_arr, gnn_arr, topk_overlap_k)
         fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
         cmap = ListedColormap(["#f2f2f2", "#ff7f0e", "#1f77b4", "#2ca02c"])
         norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap.N)
@@ -351,8 +407,8 @@ def plot_alignment_scatter(
             ax.set_title(gname)
             continue
 
-        s = _patch(S_map, patch_radius, patch_score_agg)
-        g = _patch(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
+        s = _patch_signed(S_map, patch_radius, patch_score_agg)
+        g = _patch_signed(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
         a, b = _safe_finite_pair(s, g)
         if len(a) < 3:
             continue
