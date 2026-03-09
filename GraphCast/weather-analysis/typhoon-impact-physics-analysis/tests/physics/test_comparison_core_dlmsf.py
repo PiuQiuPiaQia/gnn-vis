@@ -132,11 +132,12 @@ class TestDlmsfReturnDictKeys:
             report=AlignmentReport(0, 6, 2, "mean", 0.0),
             dlmsf_result=object(),
             dlmsf_report=object(),
+            track_patch_analysis=object(),
             sweep_rows=[],
             ig_sanity_payload={"status": "skipped", "reason": "disabled", "passed": None},
             elapsed=0.0,
         )
-        assert {"dlmsf_result", "dlmsf_report"} <= set(payload)
+        assert {"dlmsf_result", "dlmsf_report", "track_patch_analysis"} <= set(payload)
 
     def test_return_payload_distinguishes_main_and_magnitude_gnn_maps(self):
         """返回 payload 应显式区分 signed/main maps 与 magnitude maps。"""
@@ -151,6 +152,7 @@ class TestDlmsfReturnDictKeys:
             report=AlignmentReport(0, 6, 2, "mean", 0.0),
             dlmsf_result=None,
             dlmsf_report=None,
+            track_patch_analysis=None,
             sweep_rows=[],
             ig_sanity_payload={"status": "skipped", "reason": "disabled", "passed": None},
             elapsed=0.0,
@@ -159,6 +161,7 @@ class TestDlmsfReturnDictKeys:
         assert payload["gnn_main_maps"] is signed_maps
         assert payload["gnn_ig_maps"] is magnitude_maps
         assert payload["gnn_ig_magnitude_maps"] is magnitude_maps
+        assert payload["track_patch_analysis"] is None
 class TestSignedAndMagnitudeGnnGroupMaps:
     """验证 comparison_core 将 signed 主路径和 magnitude 补充路径分开。"""
 
@@ -490,6 +493,63 @@ class TestDeepLayerSteeringInputValidation:
         )
 
         assert result is None
+
+    def test_run_steering_sweep_imports_compute_sensitivity_jax_locally(self, monkeypatch):
+        import sys
+        import types
+        from types import SimpleNamespace
+
+        import config as cfg_mod
+        from physics.swe.comparison_core import _run_steering_sweep
+
+        calls = []
+        fake_module = types.ModuleType("physics.swe.swe_sensitivity")
+
+        def fake_compute_sensitivity_jax(*args, **kwargs):
+            calls.append(
+                {
+                    "forced_U_bar": kwargs["forced_U_bar"],
+                    "forced_V_bar": kwargs["forced_V_bar"],
+                }
+            )
+            return SimpleNamespace()
+
+        fake_module.compute_sensitivity_jax = fake_compute_sensitivity_jax
+        monkeypatch.setitem(sys.modules, "physics.swe.swe_sensitivity", fake_module)
+        monkeypatch.setattr(cfg_mod, "SWE_UBAR_SWEEP_MAGS", [0.0, 2.0], raising=False)
+        monkeypatch.setattr(
+            "physics.swe.comparison_core._compute_upstream_and_anisotropy",
+            lambda swe_result, lead_h: {"upstream_fraction": 0.5, "anisotropy_ratio": 1.0},
+        )
+
+        rows = _run_steering_sweep(
+            h0=np.zeros((2, 2)),
+            u0=np.zeros((2, 2)),
+            v0=np.zeros((2, 2)),
+            swe_lat=np.array([0.0, 1.0]),
+            swe_lon=np.array([10.0, 11.0]),
+            center_lat=0.5,
+            center_lon=10.5,
+            t_idx=0,
+            lead_h=6.0,
+            sigma_deg=3.0,
+            swe_dt=300.0,
+            core_radius_deg=3.0,
+            constraint_mode="geostrophic_hard",
+            base_u=4.0,
+            base_v=0.0,
+            H_eq=22.0,
+            rayleigh_momentum_h=4.0,
+            rayleigh_height_h=8.0,
+            diffusion_coeff=1e4,
+            sponge_width=6,
+            sponge_efold_h=1.5,
+        )
+
+        assert len(rows) == 2
+        assert len(calls) == 2
+        assert calls[0]["forced_U_bar"] == 0.0
+        assert calls[1]["forced_U_bar"] == 2.0
 
 
 class TestArtifactGuards:

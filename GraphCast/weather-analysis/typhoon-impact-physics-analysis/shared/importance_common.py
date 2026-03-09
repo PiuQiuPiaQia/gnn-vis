@@ -1,11 +1,28 @@
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 import xarray
+from types import SimpleNamespace
 
-from graphcast import xarray_jax
+try:
+    import jax
+    import jax.numpy as jnp
+except ModuleNotFoundError:  # pragma: no cover - lightweight tests import helpers without jax
+    def _missing_jax(*args, **kwargs):
+        raise ModuleNotFoundError("jax is required for this code path")
+
+    jax = SimpleNamespace(Array=object, random=SimpleNamespace(PRNGKey=lambda seed: seed))
+    jnp = np
+
+try:
+    from graphcast import xarray_jax
+except ModuleNotFoundError:  # pragma: no cover - lightweight tests do not need GraphCast bindings
+    class _XarrayJaxStub:
+        @staticmethod
+        def unwrap_data(value, require_jax: bool = False):
+            return np.asarray(getattr(value, "values", value))
+
+    xarray_jax = _XarrayJaxStub()
 
 from shared.analysis_pipeline import AnalysisConfig, AnalysisContext, select_target_data
 from shared.impact_analysis_utils import resolve_level_sel
@@ -85,4 +102,33 @@ def reduce_input_attribution_to_latlon(
         if "level" in attr_da.dims:
             attr_da = attr_da.mean(dim="level")
 
+    return attr_da.transpose("lat", "lon")
+
+
+def collapse_input_attribution_to_latlon(
+    attribution: np.ndarray,
+    original_da: xarray.DataArray,
+    *,
+    abs_before_sum: bool = False,
+) -> xarray.DataArray:
+    """Collapse attribution to lat/lon by summing every non-spatial channel.
+
+    This matches patch-level formulas that sum over all channels c before
+    aggregating over spatial cells g in a patch.
+    """
+    attr_da = xarray.DataArray(
+        attribution,
+        dims=original_da.dims,
+        coords=original_da.coords,
+        attrs=original_da.attrs,
+    )
+
+    if "batch" in attr_da.dims:
+        attr_da = attr_da.isel(batch=0)
+    if abs_before_sum:
+        attr_da = np.abs(attr_da)
+
+    reduce_dims = [dim for dim in attr_da.dims if dim not in {"lat", "lon"}]
+    if reduce_dims:
+        attr_da = attr_da.sum(dim=reduce_dims)
     return attr_da.transpose("lat", "lon")

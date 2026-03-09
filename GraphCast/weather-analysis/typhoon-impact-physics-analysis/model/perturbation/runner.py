@@ -2,13 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+from types import SimpleNamespace
 
-import jax
 import numpy as np
 import xarray
 
 from shared.analysis_pipeline import AnalysisConfig, AnalysisContext, select_target_data
 from shared.impact_analysis_utils import build_indexer, resolve_level_sel
+
+try:
+    import jax
+except ModuleNotFoundError:  # pragma: no cover - lightweight tests may import helpers without jax
+    def _missing_jax(*args, **kwargs):
+        raise ModuleNotFoundError("jax is required for this code path")
+
+    jax = SimpleNamespace(
+        random=SimpleNamespace(PRNGKey=lambda seed: seed),
+    )
 
 
 @dataclass(frozen=True)

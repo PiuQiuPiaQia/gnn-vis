@@ -531,6 +531,36 @@ class TestScatterPreprocessingDirect:
         np.testing.assert_array_equal(x_vals, np.array([10.0, -5.0, -1.0, 3.0]))
         np.testing.assert_array_equal(y_vals, np.array([-8.0, 4.0, 1.0, -2.0]))
 
+    def test_plot_alignment_scatter_can_abs_gnn_values_for_display(self, tmp_path, monkeypatch):
+        """Display-only mode can abs the GNN axis without changing scatter pairing."""
+        captured: list[tuple[np.ndarray, np.ndarray]] = []
+
+        def _capture(self, x, y, *args, **kwargs):
+            captured.append((np.asarray(x), np.asarray(y)))
+            return None
+
+        monkeypatch.setattr("matplotlib.axes._axes.Axes.scatter", _capture)
+
+        swe_map = np.array([[10.0, -5.0, np.nan], [2.0, -1.0, 3.0]])
+        gnn_map = np.array([[-8.0, 4.0, 7.0], [np.nan, 1.0, -2.0]])
+        gnn_ig_maps = {"z_500": gnn_map}
+        pairs = [("h", swe_map, "z_500", "SWE", "|GNN|")]
+        report = AlignmentReport(0, 6, 0, "mean", 3.0)
+        report.groups.append(GroupMetrics("h", -1.0, 0.0, {50: 0.0}, 4))
+
+        plot_alignment_scatter(
+            pairs, gnn_ig_maps, report,
+            target_time_idx=0, lead_time_h=6,
+            output_dir=tmp_path, output_prefix="test",
+            patch_radius=0,
+            abs_gnn_for_display=True,
+        )
+
+        assert len(captured) == 1
+        x_vals, y_vals = captured[0]
+        np.testing.assert_array_equal(x_vals, np.array([10.0, -5.0, -1.0, 3.0]))
+        np.testing.assert_array_equal(y_vals, np.array([8.0, 4.0, 1.0, 2.0]))
+
 
 # =============================================================================
 # Test: existing API behavior preserved

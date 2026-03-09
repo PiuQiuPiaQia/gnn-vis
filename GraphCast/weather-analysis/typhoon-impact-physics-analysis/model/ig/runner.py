@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
+from types import SimpleNamespace
 
 import numpy as np
 import xarray
@@ -9,7 +10,13 @@ from shared.analysis_pipeline import AnalysisConfig, AnalysisContext
 from shared.importance_common import _combined_target_scalar, reduce_input_attribution_to_latlon
 from shared.patch_scoring_utils import window_reduce_2d
 
-import jax
+try:
+    import jax
+except ModuleNotFoundError:  # pragma: no cover - lightweight tests may monkeypatch jax.grad
+    def _missing_jax(*args, **kwargs):
+        raise ModuleNotFoundError("jax is required for this code path")
+
+    jax = SimpleNamespace(grad=_missing_jax)
 
 
 def _build_patch_candidate_maps(

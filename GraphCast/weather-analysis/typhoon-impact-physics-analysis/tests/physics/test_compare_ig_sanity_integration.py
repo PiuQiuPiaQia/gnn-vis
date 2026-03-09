@@ -128,6 +128,7 @@ class TestComparisonResultPayloadAndIgSanityArtifacts:
             report=MagicMock(),
             dlmsf_result=MagicMock(),
             dlmsf_report=MagicMock(),
+            track_patch_analysis=MagicMock(),
             sweep_rows=[
                 {"upstream_fraction": 0.25},
                 {"upstream_fraction": float("nan")},
@@ -144,6 +145,7 @@ class TestComparisonResultPayloadAndIgSanityArtifacts:
             "report",
             "dlmsf_result",
             "dlmsf_report",
+            "track_patch_analysis",
             "upstream_fraction_series",
             "ig_sanity",
             "elapsed_sec",

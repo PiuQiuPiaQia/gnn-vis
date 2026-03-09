@@ -392,6 +392,7 @@ def plot_alignment_scatter(
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
     dpi: int = 200,
+    abs_gnn_for_display: bool = False,
 ) -> None:
     import matplotlib.pyplot as plt
 
@@ -413,9 +414,14 @@ def plot_alignment_scatter(
         if len(a) < 3:
             continue
 
-        ax.scatter(a, b, s=4, alpha=0.35, rasterized=True, color="steelblue")
+        g_display = np.abs(b) if abs_gnn_for_display else b
+
+        ax.scatter(a, g_display, s=4, alpha=0.35, rasterized=True, color="steelblue")
         ax.set_xscale("symlog", linthresh=np.quantile(a[a > 0], 0.01) if (a > 0).any() else 1e-8)
-        ax.set_yscale("symlog", linthresh=np.quantile(b[b > 0], 0.01) if (b > 0).any() else 1e-8)
+        ax.set_yscale(
+            "symlog",
+            linthresh=np.quantile(g_display[g_display > 0], 0.01) if (g_display > 0).any() else 1e-8,
+        )
         ax.set_xlabel(xlabel, fontsize=10)
         ax.set_ylabel(ylabel, fontsize=10)
 

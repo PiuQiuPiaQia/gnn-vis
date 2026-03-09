@@ -242,13 +242,6 @@ def run_ig_perturb_sanity(
         Dict with status, reason (if not ok), passed, stats, excerpts.
         Status is one of: 'skipped', 'failed', 'ok'.
     """
-    from model.ig.runner import _build_patch_candidate_maps
-    from model.perturbation.runner import (
-        _select_top_k_candidates,
-        _evaluate_candidates_with_perturbation,
-    )
-    from shared.analysis_pipeline import resolve_spatial_variables
-    
     # Check if enabled
     if not getattr(runtime_cfg, "ig_sanity_enable", True):
         return {
@@ -256,6 +249,13 @@ def run_ig_perturb_sanity(
             "reason": "disabled",
             "passed": None,
         }
+
+    from model.ig.runner import _build_patch_candidate_maps
+    from model.perturbation.runner import (
+        _select_top_k_candidates,
+        _evaluate_candidates_with_perturbation,
+    )
+    from shared.analysis_pipeline import resolve_spatial_variables
     
     topk = getattr(runtime_cfg, "ig_sanity_topk", 10)
     random_k = getattr(runtime_cfg, "ig_sanity_random_k", 10)

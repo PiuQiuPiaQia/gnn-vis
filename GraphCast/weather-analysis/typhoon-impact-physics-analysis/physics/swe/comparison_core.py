@@ -5,15 +5,14 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from types import SimpleNamespace
 
-import jax
 import numpy as np
 import xarray
 
 import config as cfg
 from shared.analysis_pipeline import AnalysisConfig, build_analysis_context
 from shared.importance_common import reduce_input_attribution_to_latlon, target_scalar
-from shared.model_utils import load_normalization_stats
 from shared.baseline import _build_climatology_baseline_inputs
 from physics.swe.alignment import (
     compute_alignment_report,
@@ -24,12 +23,19 @@ from physics.swe.alignment import (
     _group_metrics,
     AlignmentReport,
 )
-from physics.swe.swe_sensitivity import (
-    compute_sensitivity_jax,
-    extract_swe_initial_conditions,
-)
 from physics.swe.metrics import compute_anisotropy_ratio_km, compute_upstream_fraction
 from physics.swe.steering import compute_deep_layer_environmental_steering
+
+try:
+    import jax
+except ModuleNotFoundError:  # pragma: no cover - exercised in lightweight unit tests
+    def _missing_jax(*args, **kwargs):
+        raise ModuleNotFoundError("jax is required for this code path")
+
+    jax = SimpleNamespace(
+        grad=_missing_jax,
+        random=SimpleNamespace(PRNGKey=lambda seed: seed),
+    )
 
 ROOT_DIR = Path(__file__).resolve().parents[2] if "__file__" in globals() else Path.cwd()
 RESULTS_DIR = ROOT_DIR / "validation_results"
@@ -92,6 +98,8 @@ def _run_steering_sweep(
     sponge_width: int,
     sponge_efold_h: float,
 ) -> List[Dict[str, float]]:
+    from physics.swe.swe_sensitivity import compute_sensitivity_jax
+
     mags = list(getattr(cfg, "SWE_UBAR_SWEEP_MAGS", [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]))
     if not mags:
         return []
@@ -365,6 +373,7 @@ def _build_comparison_result_payload(
     report: AlignmentReport,
     dlmsf_result: Any,
     dlmsf_report: Any,
+    track_patch_analysis: Any,
     sweep_rows: List[Dict[str, float]],
     ig_sanity_payload: Dict[str, Any],
     elapsed: float,
@@ -374,6 +383,7 @@ def _build_comparison_result_payload(
         "report": report,
         "dlmsf_result": dlmsf_result,
         "dlmsf_report": dlmsf_report,
+        "track_patch_analysis": track_patch_analysis,
         "upstream_fraction_series": [
             float(r["upstream_fraction"])
             for r in sweep_rows
@@ -453,7 +463,7 @@ def _build_swe_alignment_inputs(
 
     if "z_500" in signed_gnn_maps:
         main_pairs_metrics.append(("h", swe_result.S_h, "z_500"))
-        main_pairs_scatter.append(("h", swe_result.S_h, "z_500", "SWE $S_h$", "GNN IG (signed z₅₀₀)"))
+        main_pairs_scatter.append(("h", swe_result.S_h, "z_500", "SWE $S_h$", "|GNN IG (signed z₅₀₀)|"))
 
     if "uv_500" in magnitude_gnn_maps and "uv_500" not in signed_gnn_maps:
         warnings.append(
@@ -496,6 +506,7 @@ def run_physics_comparison() -> Dict[str, Any]:
         runtime_cfg=runtime_cfg,
         target_var=context.target_var,
     )
+    from shared.model_utils import load_normalization_stats
     _, mean_by_level, _ = load_normalization_stats(runtime_cfg.dir_path_stats)
     baseline_inputs = _build_climatology_baseline_inputs(
         eval_inputs=context.eval_inputs,
@@ -524,6 +535,10 @@ def run_physics_comparison() -> Dict[str, Any]:
     print(f"  Constraint mode: {constraint_mode}")
     print(f"  Core-mask radius: {core_radius_deg:.2f}°")
 
+    from physics.swe.swe_sensitivity import (
+        compute_sensitivity_jax,
+        extract_swe_initial_conditions,
+    )
     h0, u0, v0, swe_lat, swe_lon = extract_swe_initial_conditions(
         context.eval_inputs, context.center_lat, context.center_lon,
         domain_half_deg=domain_half,
@@ -604,51 +619,12 @@ def run_physics_comparison() -> Dict[str, Any]:
         print(f"  Saved sweep: {sweep_path}")
         print("  Sweep upstream_fraction:", [round(float(r["upstream_fraction"]), 3) for r in sweep_rows])
 
-    print("\n[Phase 1c] DLMSF Physical Sensitivity (Finite Difference)")
+    print("\n[Phase 1c] DLMSF track-patch comparison")
     dlmsf_result = None
+    dlmsf_report = None
+    track_patch_analysis = None
     if bool(getattr(cfg, "DLMSF_ENABLE", True)):
-        try:
-            from physics.dlmsf_patch_fd.dlmsf_sensitivity import (
-                compute_d_hat,
-                compute_dlmsf_patch_fd,
-            )
-            from cyclone_points import CYCLONE_CENTERS, pick_target_cyclone
-        except ImportError as exc:
-            print(f"  [warn] DLMSF 模块未找到，已跳过: {exc}")
-        else:
-            init_center = next(
-                (c for c in CYCLONE_CENTERS if c.get("input_time_idx") == 1), None
-            )
-            if init_center is None:
-                raise ValueError(
-                    "CYCLONE_CENTERS 中找不到 input_time_idx==1 的记录，"
-                    "请检查 cyclone_points.py 配置"
-                )
-            target_center = pick_target_cyclone(t_idx)
-            d_hat = compute_d_hat(
-                float(init_center["lat"]), float(init_center["lon"]),
-                float(target_center["lat"]), float(target_center["lon"]),
-            )
-            print(f"  d_hat=({d_hat[0]:+.3f}, {d_hat[1]:+.3f})")
-
-            dlmsf_result = compute_dlmsf_patch_fd(
-                eval_inputs=context.eval_inputs,
-                lat_vals=swe_lat,
-                lon_vals=swe_lon,
-                center_lat=context.center_lat,
-                center_lon=context.center_lon,
-                d_hat=d_hat,
-                target_time_idx=t_idx,
-                patch_size_deg=float(getattr(cfg, "DLMSF_PATCH_SIZE_DEG", 2.0)),
-                eps=float(getattr(cfg, "DLMSF_EPS", 1.0)),
-                core_radius_deg=core_radius_deg,
-                annulus_inner_km=float(getattr(cfg, "SWE_STEERING_ANNULUS_INNER_KM", 300.0)),
-                annulus_outer_km=float(getattr(cfg, "SWE_STEERING_ANNULUS_OUTER_KM", 900.0)),
-                levels_bottom_hpa=float(getattr(cfg, "DLMSF_LEVELS_BOTTOM_HPA", 925.0)),
-                levels_top_hpa=float(getattr(cfg, "DLMSF_LEVELS_TOP_HPA", 300.0)),
-            )
-            print(f"  DLMSF done: n_patches={dlmsf_result.n_patches}  "
-                  f"elapsed={dlmsf_result.elapsed_sec:.1f}s")
+        print("  Track-patch DLMSF vs IG will run after SWE alignment.")
     else:
         print("  DLMSF_ENABLE=False, skipped.")
 
@@ -768,6 +744,7 @@ def run_physics_comparison() -> Dict[str, Any]:
             target_time_idx=t_idx, lead_time_h=lead_h,
             output_dir=RESULTS_DIR, output_prefix="swe",
             patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+            abs_gnn_for_display=True,
         )
     else:
         print("  [warn] SWE signed main comparison is empty, skipping scatter artifact.")
@@ -783,68 +760,46 @@ def run_physics_comparison() -> Dict[str, Any]:
     json_path = RESULTS_DIR / "physics_alignment_metrics.json"
     save_report_json(report, json_path)
 
-    print("\n[Phase 3b] DLMSF vs IG Alignment")
-    dlmsf_report = None
-    if dlmsf_result is not None:
-        dlmsf_inputs = _build_dlmsf_alignment_inputs(dlmsf_result, gnn_signed_maps, gnn_ig_maps)
-        for msg in dlmsf_inputs["warnings"]:
-            print(f"  [warn] {msg}")
-        dlmsf_report = AlignmentReport(
-            target_time_idx=t_idx,
-            lead_time_h=lead_h,
-            patch_radius=patch_radius,
-            patch_score_agg=patch_agg,
-            sigma_deg=0.0,
+    print("\n[Phase 3b] DLMSF vs IG Track-Patch Comparison")
+    if bool(getattr(cfg, "DLMSF_ENABLE", True)):
+        from physics.dlmsf_patch_fd.patch_comparison import (
+            run_track_patch_analysis,
+            write_patch_analysis_report,
         )
-        for spec in dlmsf_inputs["main_specs"]:
-            m = _group_metrics(
-                spec["s_map"],
-                spec["gnn_map"],
-                group_name=spec["group_name"],
-                patch_radius=patch_radius,
-                patch_score_agg=patch_agg,
-                k_values=k_values,
-            )
-            dlmsf_report.groups.append(m)
-            print(f"  [DLMSF Align] {spec['gnn_key']}: ρ={m.spearman_rho:+.3f}  "
-                   f"IoU@50={m.topk_iou.get(50, float('nan')):.3f}  n={m.n_valid}")
-        dlmsf_json_path = RESULTS_DIR / "dlmsf_alignment_metrics.json"
-        if dlmsf_report.groups:
-            save_report_json(dlmsf_report, dlmsf_json_path)
+        from physics.dlmsf_patch_fd.plot_track_patch_report import write_track_patch_figures
 
-            if _should_emit_alignment_scatter(dlmsf_inputs["scatter_pairs"]):
-                plot_alignment_scatter(
-                    dlmsf_inputs["scatter_pairs"], gnn_signed_maps, dlmsf_report,
-                    target_time_idx=t_idx, lead_time_h=lead_h,
-                    output_dir=RESULTS_DIR, output_prefix="dlmsf",
-                    patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
-                )
+        track_patch_analysis = run_track_patch_analysis(
+            context=context,
+            runtime_cfg=runtime_cfg,
+            baseline_inputs=baseline_inputs,
+            cfg_module=cfg,
+        )
+        dlmsf_result = track_patch_analysis["main_result"]
+        dlmsf_report = track_patch_analysis["summary"]["cases"][track_patch_analysis["main_case"]]
+        track_patch_json_path = RESULTS_DIR / "dlmsf_track_patch_alignment.json"
+        write_patch_analysis_report(track_patch_analysis["summary"], track_patch_json_path)
+        write_track_patch_figures(
+            track_patch_json_path,
+            output_dir=RESULTS_DIR,
+            prefix="dlmsf_track_patch",
+            dpi=dpi,
+        )
 
-        else:
-            print("  [warn] DLMSF 对齐组为空（gnn_ig_maps 中无匹配 key），跳过写出报告")
-
-        if dlmsf_inputs["overlap_pairs"]:
-            # --- DLMSF 对比可视化 ---
-            # 主对比保留 signed 路径；重叠/IoU 显式使用 magnitude 轨道。
-            dlmsf_pairs = dlmsf_inputs["overlap_pairs"]
-            plot_topk_overlap_maps(
-                dlmsf_pairs, gnn_ig_maps,
-                swe_lat, swe_lon,
-                float(context.center_lat), float(context.center_lon),
-                target_time_idx=t_idx,
-                output_dir=RESULTS_DIR,
-                output_prefix="dlmsf",
-                dpi=dpi,
-                patch_radius=patch_radius,
-                patch_score_agg=patch_agg,
-                topk_overlap_k=panel_topk_overlap_k,
-            )
-
-            plot_topk_iou_curves(
-                dlmsf_pairs, gnn_ig_maps,
-                target_time_idx=t_idx, lead_time_h=lead_h,
-                output_dir=RESULTS_DIR, output_prefix="dlmsf",
-                k_values=k_values, patch_radius=patch_radius, patch_score_agg=patch_agg, dpi=dpi,
+        main_metrics = track_patch_analysis["main_metrics"]
+        print(
+            "  [Track-Patch] main="
+            f"{track_patch_analysis['main_case']}  "
+            f"pearson={main_metrics.pearson_r:+.3f}  "
+            f"spearman={main_metrics.spearman_rho:+.3f}  "
+            f"iou@{int(round(100.0 * main_metrics.topq_fraction))}%={main_metrics.iou_topq:.3f}"
+        )
+        if track_patch_analysis["main_deletion"] is not None:
+            deletion = track_patch_analysis["main_deletion"]
+            print(
+                "  [Deletion] "
+                f"AOPC(high_ig)={deletion.high_ig_aopc:.4f}  "
+                f"AOPC(low_ig)={deletion.low_ig_aopc:.4f}  "
+                f"AOPC(random)={deletion.random_mean_aopc:.4f}"
             )
     else:
         print("  DLMSF result unavailable, skipped.")
@@ -860,6 +815,7 @@ def run_physics_comparison() -> Dict[str, Any]:
         report=report,
         dlmsf_result=dlmsf_result,
         dlmsf_report=dlmsf_report,
+        track_patch_analysis=track_patch_analysis,
         sweep_rows=sweep_rows,
         ig_sanity_payload=ig_sanity_payload,
         elapsed=elapsed,
