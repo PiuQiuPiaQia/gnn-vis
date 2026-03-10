@@ -1,0 +1,163 @@
+"""Tests for _project_wind_ig_along_track (E2: wind-along signed IG projection).
+
+The function projects the raw (per-variable) IG arrays for u/v wind onto the
+along-track direction d_hat, optionally filtering to a pressure-level band,
+and returns a signed lat×lon cell map for the given window.
+"""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+import xarray as xr
+
+from physics.dlmsf_patch_fd.patch_comparison import _project_wind_ig_along_track
+from shared.patch_geometry import CenteredWindow
+
+
+def _make_window(shape=(2, 3)) -> CenteredWindow:
+    n_lat, n_lon = shape
+    return CenteredWindow(
+        lat_indices=np.arange(n_lat, dtype=np.int64),
+        lon_indices=np.arange(n_lon, dtype=np.int64),
+        lat_vals=np.linspace(10.0, 10.0 + n_lat - 1, n_lat),
+        lon_vals=np.linspace(120.0, 120.0 + n_lon - 1, n_lon),
+        center_row=n_lat // 2,
+        center_col=n_lon // 2,
+        core_mask=np.zeros(shape, dtype=bool),
+    )
+
+
+def _make_wind_da(data: np.ndarray, levels: np.ndarray, lat: np.ndarray, lon: np.ndarray) -> xr.DataArray:
+    """Create a (level, lat, lon) DataArray for a wind component."""
+    return xr.DataArray(
+        data,
+        dims=("level", "lat", "lon"),
+        coords={"level": levels, "lat": lat, "lon": lon},
+    )
+
+
+class TestProjectWindIgAlongTrack:
+    """Tests for _project_wind_ig_along_track."""
+
+    def _base_inputs(self):
+        levels = np.array([1000.0, 925.0, 850.0, 500.0, 300.0, 200.0])
+        lat = np.array([10.0, 11.0])
+        lon = np.array([120.0, 121.0, 122.0])
+        n_lev = len(levels)
+        u_data = np.ones((n_lev, 2, 3), dtype=np.float64)
+        v_data = np.zeros((n_lev, 2, 3), dtype=np.float64)
+        u_da = _make_wind_da(u_data, levels, lat, lon)
+        v_da = _make_wind_da(v_data, levels, lat, lon)
+        window = _make_window((2, 3))
+        return u_da, v_da, window
+
+    def test_output_shape_matches_window(self):
+        u_da, v_da, window = self._base_inputs()
+        result = _project_wind_ig_along_track(
+            ig_u_full=np.asarray(u_da.values),
+            ig_v_full=np.asarray(v_da.values),
+            u_da=u_da,
+            v_da=v_da,
+            window=window,
+            d_hat=(1.0, 0.0),
+        )
+        assert result.shape == window.shape
+
+    def test_due_east_projects_only_u(self):
+        """d̂=(1,0): signed_cell_map = sum over levels of ig_u * 1 + ig_v * 0."""
+        u_da, v_da, window = self._base_inputs()
+        # u=1 at all levels, v=0; d̂=(1,0) → project = u
+        # 925-300 hPa filter keeps levels: 925, 850, 500, 300 → 4 levels
+        result = _project_wind_ig_along_track(
+            ig_u_full=np.asarray(u_da.values),
+            ig_v_full=np.asarray(v_da.values),
+            u_da=u_da,
+            v_da=v_da,
+            window=window,
+            d_hat=(1.0, 0.0),
+            levels_bottom_hpa=925.0,
+            levels_top_hpa=300.0,
+        )
+        # Sum over 4 levels, each u=1, d̂_u=1 → 4.0 per cell
+        assert result.shape == (2, 3)
+        np.testing.assert_allclose(result, np.full((2, 3), 4.0))
+
+    def test_due_north_projects_only_v(self):
+        """d̂=(0,1): signed_cell_map = sum over levels of ig_v."""
+        u_da, v_da, window = self._base_inputs()
+        # set v=2 everywhere
+        v_da2 = v_da + 2.0
+        result = _project_wind_ig_along_track(
+            ig_u_full=np.asarray(u_da.values),
+            ig_v_full=np.asarray(v_da2.values),
+            u_da=u_da,
+            v_da=v_da2,
+            window=window,
+            d_hat=(0.0, 1.0),
+            levels_bottom_hpa=925.0,
+            levels_top_hpa=300.0,
+        )
+        # ig_u * 0 + ig_v * 1 = 2; 4 levels → 8.0 per cell
+        np.testing.assert_allclose(result, np.full((2, 3), 8.0))
+
+    def test_level_filter_excludes_out_of_range(self):
+        """Only levels in [300, 925] hPa are summed."""
+        levels = np.array([1000.0, 925.0, 300.0, 200.0])
+        lat = np.array([10.0, 11.0])
+        lon = np.array([120.0, 121.0, 122.0])
+        # level values as the IG: 1000→10, 925→1, 300→1, 200→100
+        u_data = np.zeros((4, 2, 3), dtype=np.float64)
+        for i, lev_val in enumerate([10.0, 1.0, 1.0, 100.0]):
+            u_data[i] = lev_val
+        u_da = _make_wind_da(u_data, levels, lat, lon)
+        v_da = _make_wind_da(np.zeros_like(u_data), levels, lat, lon)
+        window = _make_window((2, 3))
+
+        result = _project_wind_ig_along_track(
+            ig_u_full=u_data,
+            ig_v_full=np.zeros_like(u_data),
+            u_da=u_da,
+            v_da=v_da,
+            window=window,
+            d_hat=(1.0, 0.0),
+            levels_bottom_hpa=925.0,
+            levels_top_hpa=300.0,
+        )
+        # Only levels 925 (value=1) and 300 (value=1) kept → sum=2 per cell
+        np.testing.assert_allclose(result, np.full((2, 3), 2.0))
+
+    def test_negative_values_give_negative_projection(self):
+        """Negative IG produces negative signed cell map."""
+        u_da, v_da, window = self._base_inputs()
+        # Negate u IG
+        result = _project_wind_ig_along_track(
+            ig_u_full=-np.asarray(u_da.values),
+            ig_v_full=np.asarray(v_da.values),
+            u_da=u_da,
+            v_da=v_da,
+            window=window,
+            d_hat=(1.0, 0.0),
+            levels_bottom_hpa=925.0,
+            levels_top_hpa=300.0,
+        )
+        np.testing.assert_allclose(result, np.full((2, 3), -4.0))
+
+    def test_no_level_dim_sums_only_spatial(self):
+        """Variables without level dim are summed spatially only."""
+        lat = np.array([10.0, 11.0])
+        lon = np.array([120.0, 121.0, 122.0])
+        u_data = np.ones((2, 3), dtype=np.float64)
+        v_data = np.zeros((2, 3), dtype=np.float64)
+        u_da = xr.DataArray(u_data, dims=("lat", "lon"), coords={"lat": lat, "lon": lon})
+        v_da = xr.DataArray(v_data, dims=("lat", "lon"), coords={"lat": lat, "lon": lon})
+        window = _make_window((2, 3))
+        result = _project_wind_ig_along_track(
+            ig_u_full=u_data,
+            ig_v_full=v_data,
+            u_da=u_da,
+            v_da=v_da,
+            window=window,
+            d_hat=(1.0, 0.0),
+        )
+        # No level filtering needed; u=1, d̂_u=1 → 1.0 per cell
+        np.testing.assert_allclose(result, np.full((2, 3), 1.0))
