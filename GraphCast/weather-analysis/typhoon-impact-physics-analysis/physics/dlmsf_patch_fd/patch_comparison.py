@@ -1431,6 +1431,7 @@ def run_track_patch_analysis(
 
     cases: Dict[str, Any] = {}
     main_case_key = f"{direction}_p{main_patch_size}"
+    wind_along_key = f"wind_along_signed_p{main_patch_size}"
     environment_map = _extract_window_field_map(
         context.eval_inputs,
         field_name=center_field_name,
@@ -1612,7 +1613,6 @@ def run_track_patch_analysis(
         v_levels=_vv_for_mask,
     )
     if wind_u_var in raw_ig and wind_v_var in raw_ig:
-        wind_along_key = f"wind_along_signed_p{main_patch_size}"
         wind_signed_cell_map = _project_wind_ig_along_track(
             ig_u_full=raw_ig[wind_u_var],
             ig_v_full=raw_ig[wind_v_var],
@@ -1846,6 +1846,7 @@ def run_track_patch_analysis(
     summary = {
         "source_pipeline": "swe",
         "main_case": main_case_key,
+        "wind_case": wind_along_key,
         "window_size": window_size,
         "core_size": core_size,
         "stride": stride,
@@ -1856,6 +1857,7 @@ def run_track_patch_analysis(
     }
     return {
         "main_case": main_case_key,
+        "wind_case": wind_along_key,
         "window": window,
         "cases": cases,
         "summary": summary,

@@ -184,3 +184,88 @@ def test_sign_map_annotation_does_not_contain_pearson(tmp_path):
     assert "Pearson" not in text
     assert "pearson" not in text.lower()
     assert "0.80" in text or "80" in text
+
+
+def test_plot_sign_map_uses_wind_case_when_present(tmp_path):
+    """plot_track_patch_sign_map reads wind_case, not main_case."""
+    from physics.dlmsf_patch_fd.plot_track_patch_report import plot_track_patch_sign_map
+
+    nlat, nlon = 5, 5
+    sign_map = np.zeros((nlat, nlon), dtype=int)
+    sign_map[2, 2] = 1
+
+    report = {
+        "main_case": "along_p3",
+        "wind_case": "wind_along_signed_p3",
+        "cases": {
+            "along_p3": {
+                "visualization": None,
+            },
+            "wind_along_signed_p3": {
+                "visualization": {
+                    "meta": {
+                        "direction": "along", "patch_size": 3,
+                        "target_time_idx": 1, "topq_fraction": 0.2,
+                        "source": "wind_along_signed",
+                    },
+                    "sign_map": {
+                        "lat_vals": np.linspace(20, 25, nlat).tolist(),
+                        "lon_vals": np.linspace(120, 125, nlon).tolist(),
+                        "sign_class_map": sign_map.tolist(),
+                        "overlap_mask": (sign_map > 0).tolist(),
+                        "sign_agreement_at_20": 0.75,
+                    },
+                    "scatter": {
+                        "x_patch_abs_scores": [1.0],
+                        "y_patch_abs_scores": [1.0],
+                        "spearman_rho": 0.5,
+                    },
+                },
+            },
+        },
+    }
+
+    out = tmp_path / "sign_map.png"
+    result = plot_track_patch_sign_map(report, out)
+    assert result is not None, "Should produce a figure from wind_case"
+    assert out.exists(), "PNG file should be created"
+
+
+def test_plot_sign_map_falls_back_to_main_case_if_wind_case_missing(tmp_path):
+    """If wind_case is absent, falls back to main_case."""
+    from physics.dlmsf_patch_fd.plot_track_patch_report import plot_track_patch_sign_map
+
+    nlat, nlon = 4, 4
+    sign_map = np.ones((nlat, nlon), dtype=int)
+
+    report = {
+        "main_case": "along_p3",
+        "cases": {
+            "along_p3": {
+                "visualization": {
+                    "meta": {
+                        "direction": "along", "patch_size": 3,
+                        "target_time_idx": 1, "topq_fraction": 0.2,
+                        "source": "ig",
+                    },
+                    "sign_map": {
+                        "lat_vals": np.linspace(20, 24, nlat).tolist(),
+                        "lon_vals": np.linspace(120, 124, nlon).tolist(),
+                        "sign_class_map": sign_map.tolist(),
+                        "overlap_mask": (sign_map > 0).tolist(),
+                        "sign_agreement_at_20": 0.6,
+                    },
+                    "scatter": {
+                        "x_patch_abs_scores": [1.0],
+                        "y_patch_abs_scores": [1.0],
+                        "spearman_rho": 0.4,
+                    },
+                },
+            },
+        },
+    }
+
+    out = tmp_path / "sign_map_fallback.png"
+    result = plot_track_patch_sign_map(report, out)
+    assert result is not None, "Should produce a figure from main_case fallback"
+    assert out.exists()
