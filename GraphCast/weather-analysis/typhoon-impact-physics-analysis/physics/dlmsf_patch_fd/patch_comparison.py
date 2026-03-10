@@ -4,7 +4,7 @@ import json
 import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 import jax
 import numpy as np
@@ -880,6 +880,43 @@ def classify_patch_roles(
     return roles
 
 
+def _filter_uv_to_band(
+    u_anom: np.ndarray,
+    v_anom: np.ndarray,
+    levels: np.ndarray,
+    *,
+    levels_bottom: float,
+    levels_top: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Filter (u, v, levels) arrays to the [levels_top, levels_bottom] hPa band.
+
+    Parameters
+    ----------
+    u_anom, v_anom:
+        Wind anomaly arrays of shape (n_levels, nlat, nlon).
+    levels:
+        1-D pressure levels array in hPa.
+    levels_bottom, levels_top:
+        Band boundaries (inclusive). levels_bottom > levels_top.
+
+    Returns
+    -------
+    u_sel, v_sel, levels_sel : filtered arrays.
+
+    Raises
+    ------
+    ValueError if no levels fall in the band.
+    """
+    band_mask = (levels >= levels_top) & (levels <= levels_bottom)
+    sel = np.where(band_mask)[0]
+    if len(sel) == 0:
+        raise ValueError(
+            f"no pressure levels in {levels_top}–{levels_bottom} hPa "
+            f"(available: {levels.tolist()})"
+        )
+    return u_anom[sel], v_anom[sel], levels[sel]
+
+
 def _compute_dlmsf_env_mask(
     *,
     lat_vals: np.ndarray,
@@ -1653,20 +1690,15 @@ def run_track_patch_analysis(
             j_fd_anomaly = float(dlmsf_result.J_phys_baseline) - j_base_e1
             u_anom = (u_eval - u_base).astype(np.float64)
             v_anom = (v_eval - v_base).astype(np.float64)
-            # Filter to 925–300 hPa band (same as FD-DLMSF / compute_dlmsf_925_300)
             _levels_bottom_e1 = float(getattr(cfg_module, "DLMSF_LEVELS_BOTTOM_HPA", 925.0))
             _levels_top_e1 = float(getattr(cfg_module, "DLMSF_LEVELS_TOP_HPA", 300.0))
-            _band_mask_e1 = (
-                (levels_eval >= _levels_top_e1) & (levels_eval <= _levels_bottom_e1)
+            u_anom_e1, v_anom_e1, levels_e1 = _filter_uv_to_band(
+                u_anom,
+                v_anom,
+                levels_eval,
+                levels_bottom=_levels_bottom_e1,
+                levels_top=_levels_top_e1,
             )
-            _sel_e1 = np.where(_band_mask_e1)[0]
-            if len(_sel_e1) == 0:
-                raise ValueError(
-                    f"E1: no pressure levels in {_levels_top_e1}–{_levels_bottom_e1} hPa"
-                )
-            u_anom_e1 = u_anom[_sel_e1]
-            v_anom_e1 = v_anom[_sel_e1]
-            levels_e1 = levels_eval[_sel_e1]
             env_mask_e1 = env_mask_annulus  # reuse precomputed mask
             ig_phys_result = compute_ig_phys_dlmsf_along(
                 u=u_anom_e1,
@@ -1730,6 +1762,10 @@ def run_track_patch_analysis(
                 f"j_fd_full={dlmsf_result.J_phys_baseline:.4f}"
             )
         except Exception as _e1_exc:
+            if "no pressure levels" in str(_e1_exc):
+                print(f"[E1] Skipping ig_phys: {_e1_exc}", flush=True)
+            else:
+                print(f"[E1] ig_phys computation failed: {_e1_exc}", flush=True)
             print(f"[Track-Patch] E1 skipped: {_e1_exc}")
 
     if main_case_key not in cases:
