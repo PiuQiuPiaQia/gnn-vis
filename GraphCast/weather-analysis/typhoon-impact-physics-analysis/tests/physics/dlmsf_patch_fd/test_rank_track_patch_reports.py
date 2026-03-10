@@ -182,3 +182,32 @@ def test_write_ranked_rows_csv_outputs_header_and_rows(tmp_path):
     text = output_path.read_text(encoding="utf-8")
     assert "report_name" in text
     assert "case_a.json" in text
+
+
+def test_collect_rows_reads_wind_along_signed_metrics(tmp_path):
+    """collect_track_patch_rows must extract signed_spearman from wind_along_signed case."""
+    report_path = tmp_path / "swe_case" / "dlmsf_track_patch_alignment.json"
+    report_path.parent.mkdir(parents=True)
+    _write_report(
+        report_path,
+        pearson=0.6,
+        iou=0.4,
+        full_scalar=3.0,
+        baseline_scalar=1.0,
+        completeness=0.1,
+        high_aopc=0.5,
+        random_aopc=0.2,
+        low_aopc=0.1,
+    )
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["cases"]["wind_along_signed_p3"] = {
+        "signed_spearman": 0.72,
+        "sign_agreement_at_30": 0.61,
+    }
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    rows = collect_track_patch_rows([tmp_path], subset="swe")
+
+    assert len(rows) == 1
+    assert rows[0]["signed_spearman"] == 0.72
+    assert rows[0]["sign_agreement_at_30"] == 0.61

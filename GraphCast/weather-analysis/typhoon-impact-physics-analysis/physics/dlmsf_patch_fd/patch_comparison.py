@@ -889,6 +889,9 @@ def _compute_dlmsf_env_mask(
     core_radius_deg: float,
     annulus_inner_km: float,
     annulus_outer_km: float,
+    u_levels: "np.ndarray | None" = None,
+    v_levels: "np.ndarray | None" = None,
+    min_env_points: int = 10,
 ) -> np.ndarray:
     """Compute the boolean annular environment mask used by DLMSF.
 
@@ -914,6 +917,7 @@ def _compute_dlmsf_env_mask(
     lat_vals = np.asarray(lat_vals, dtype=np.float64)
     lon_vals = np.asarray(lon_vals, dtype=np.float64)
     nlat, nlon = len(lat_vals), len(lon_vals)
+
     dist_km = np.zeros((nlat, nlon), dtype=np.float64)
     for row in range(nlat):
         for col in range(nlon):
@@ -921,12 +925,21 @@ def _compute_dlmsf_env_mask(
                 float(center_lat), float(center_lon),
                 float(lat_vals[row]), float(lon_vals[col]),
             )
+
+    finite_mask = np.ones((nlat, nlon), dtype=bool)
+    if u_levels is not None and v_levels is not None:
+        u_arr = np.asarray(u_levels)
+        v_arr = np.asarray(v_levels)
+        for lev_idx in range(u_arr.shape[0]):
+            finite_mask &= np.isfinite(u_arr[lev_idx]) & np.isfinite(v_arr[lev_idx])
+
     core_km = float(core_radius_deg) * 111.0
-    env_mask = (
-        (dist_km > core_km)
-        & (dist_km >= float(annulus_inner_km))
-        & (dist_km <= float(annulus_outer_km))
-    )
+    core_mask = dist_km < max(core_km, float(annulus_inner_km))
+    env_mask = finite_mask & (~core_mask) & (dist_km <= float(annulus_outer_km))
+
+    if int(np.sum(env_mask)) < min_env_points:
+        env_mask = finite_mask
+
     return env_mask
 
 
@@ -1450,6 +1463,30 @@ def run_track_patch_analysis(
     levels_bottom = float(getattr(cfg_module, "DLMSF_LEVELS_BOTTOM_HPA", 925.0))
     levels_top = float(getattr(cfg_module, "DLMSF_LEVELS_TOP_HPA", 300.0))
     raw_ig = ig_maps.get("raw_ig_per_var", {})
+    # Precompute DLMSF annulus mask (reused by E2 and E1)
+    _e_core_radius_deg = float(getattr(cfg_module, "SWE_CORE_RADIUS_DEG", 3.0))
+    _e_annulus_inner_km = float(getattr(cfg_module, "SWE_STEERING_ANNULUS_INNER_KM", 300.0))
+    _e_annulus_outer_km = float(getattr(cfg_module, "SWE_STEERING_ANNULUS_OUTER_KM", 900.0))
+    _uv_for_mask = None
+    _vv_for_mask = None
+    if "u_component_of_wind" in context.eval_inputs and "v_component_of_wind" in context.eval_inputs:
+        try:
+            _uv_for_mask, _vv_for_mask, _ = _extract_uv_levels(
+                context.eval_inputs, window.lat_vals, window.lon_vals
+            )
+        except Exception:
+            pass
+    env_mask_annulus = _compute_dlmsf_env_mask(
+        lat_vals=window.lat_vals,
+        lon_vals=window.lon_vals,
+        center_lat=float(track_ref.init_lat),
+        center_lon=float(track_ref.init_lon),
+        core_radius_deg=_e_core_radius_deg,
+        annulus_inner_km=_e_annulus_inner_km,
+        annulus_outer_km=_e_annulus_outer_km,
+        u_levels=_uv_for_mask,
+        v_levels=_vv_for_mask,
+    )
     if wind_u_var in raw_ig and wind_v_var in raw_ig:
         wind_along_key = f"wind_along_signed_p{main_patch_size}"
         wind_signed_cell_map = _project_wind_ig_along_track(
@@ -1463,6 +1500,7 @@ def run_track_patch_analysis(
             levels_top_hpa=levels_top,
             time_idx=1,
         )
+        wind_signed_cell_map = wind_signed_cell_map * env_mask_annulus.astype(np.float64)
         wind_abs_cell_map = np.abs(wind_signed_cell_map)
         wind_patch = _patch_scores_from_maps(
             window=window,
@@ -1508,6 +1546,16 @@ def run_track_patch_analysis(
             np.asarray(wind_patch["signed_scores"], dtype=np.float64),
             np.asarray(dlmsf_signed, dtype=np.float64),
         )
+        wind_sign_class_scores = classify_patch_roles(
+            np.asarray(wind_patch["signed_scores"], dtype=np.float64),
+            np.asarray(dlmsf_signed, dtype=np.float64),
+        )
+        wind_sign_class_map = patch_scores_to_grid(
+            wind_sign_class_scores,
+            wind_patch["patches"],
+            window.shape,
+            core_mask=window.core_mask,
+        )
         cases[wind_along_key] = {
             "direction": direction,
             "patch_size": main_patch_size,
@@ -1531,6 +1579,27 @@ def run_track_patch_analysis(
             "signed_spearman": float(wind_signed_spearman),
             "levels_bottom_hpa": levels_bottom,
             "levels_top_hpa": levels_top,
+            "visualization": {
+                "meta": {
+                    "direction": direction,
+                    "patch_size": main_patch_size,
+                    "target_time_idx": runtime_cfg.target_time_idx,
+                    "topq_fraction": float(topk_fraction),
+                    "source": "wind_along_signed",
+                },
+                "sign_map": {
+                    "lat_vals": window.lat_vals.tolist(),
+                    "lon_vals": window.lon_vals.tolist(),
+                    "sign_class_map": wind_sign_class_map.tolist(),
+                    "overlap_mask": (wind_sign_class_map == 3).tolist(),
+                    "sign_agreement_at_20": float(wind_sign_agreement_20) if wind_sign_agreement_20 == wind_sign_agreement_20 else None,
+                },
+                "scatter": {
+                    "x_patch_abs_scores": [float(v) for v in wind_patch["abs_scores"]],
+                    "y_patch_abs_scores": [float(v) for v in np.abs(dlmsf_signed)],
+                    "spearman_rho": float(wind_signed_spearman),
+                },
+            },
         }
         print(
             f"[Track-Patch] {wind_along_key}: "
@@ -1544,9 +1613,6 @@ def run_track_patch_analysis(
     # -----------------------------------------------------------------------
     # E1: ig_phys_vs_dlmsf_fd — analytical IG on J_along vs FD
     # -----------------------------------------------------------------------
-    core_radius_deg_e1 = float(getattr(cfg_module, "SWE_CORE_RADIUS_DEG", 3.0))
-    annulus_inner_km_e1 = float(getattr(cfg_module, "SWE_STEERING_ANNULUS_INNER_KM", 300.0))
-    annulus_outer_km_e1 = float(getattr(cfg_module, "SWE_STEERING_ANNULUS_OUTER_KM", 900.0))
     if "u_component_of_wind" in context.eval_inputs and "v_component_of_wind" in context.eval_inputs:
         try:
             u_eval, v_eval, levels_eval = _extract_uv_levels(
@@ -1565,9 +1631,9 @@ def run_track_patch_analysis(
                 window.lon_vals,
                 float(track_ref.init_lat),
                 float(track_ref.init_lon),
-                core_radius_deg=core_radius_deg_e1,
-                annulus_inner_km=annulus_inner_km_e1,
-                annulus_outer_km=annulus_outer_km_e1,
+                core_radius_deg=_e_core_radius_deg,
+                annulus_inner_km=_e_annulus_inner_km,
+                annulus_outer_km=_e_annulus_outer_km,
                 levels_bottom_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_BOTTOM_HPA", 925.0)),
                 levels_top_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_TOP_HPA", 300.0)),
             )
@@ -1575,15 +1641,7 @@ def run_track_patch_analysis(
             j_fd_anomaly = float(dlmsf_result.J_phys_baseline) - j_base_e1
             u_anom = (u_eval - u_base).astype(np.float64)
             v_anom = (v_eval - v_base).astype(np.float64)
-            env_mask_e1 = _compute_dlmsf_env_mask(
-                lat_vals=window.lat_vals,
-                lon_vals=window.lon_vals,
-                center_lat=track_ref.init_lat,
-                center_lon=track_ref.init_lon,
-                core_radius_deg=core_radius_deg_e1,
-                annulus_inner_km=annulus_inner_km_e1,
-                annulus_outer_km=annulus_outer_km_e1,
-            )
+            env_mask_e1 = env_mask_annulus  # reuse precomputed mask
             ig_phys_result = compute_ig_phys_dlmsf_along(
                 u=u_anom,
                 v=v_anom,

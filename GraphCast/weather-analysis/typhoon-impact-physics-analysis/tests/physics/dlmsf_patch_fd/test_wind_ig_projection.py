@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from physics.dlmsf_patch_fd.patch_comparison import _project_wind_ig_along_track
+from physics.dlmsf_patch_fd.patch_comparison import _case_summary, _compute_dlmsf_env_mask, _project_wind_ig_along_track
 from shared.patch_geometry import CenteredWindow
 
 
@@ -265,3 +265,60 @@ def test_signed_spearman_direction():
     b_rank = scipy.stats.rankdata(b)
     rho = np.corrcoef(a_rank, b_rank)[0, 1]
     assert rho > 0.9
+
+
+def test_annulus_mask_zeroes_core_in_wind_ig():
+    """Multiplying wind_signed_cell_map by env_mask must zero core cells."""
+    import xarray
+
+    W = 9
+    lat = np.linspace(19.0, 27.0, W)
+    lon = np.linspace(119.0, 127.0, W)
+    ig_u = np.ones((1, 1, W, W), dtype=np.float64)
+    ig_v = np.zeros_like(ig_u)
+    u_da = xarray.DataArray(
+        np.zeros((1, 1, W, W), dtype=np.float32),
+        dims=("time", "level", "lat", "lon"),
+        coords={"time": [1], "level": [500.0], "lat": lat, "lon": lon},
+    )
+    window = _make_window(W, lat_vals=lat, lon_vals=lon)
+    cell_map = _project_wind_ig_along_track(
+        ig_u_full=ig_u, ig_v_full=ig_v,
+        u_da=u_da, v_da=u_da.copy(),
+        window=window, d_hat=(1.0, 0.0), time_idx=0,
+    )
+    env_mask = _compute_dlmsf_env_mask(
+        lat_vals=lat, lon_vals=lon,
+        center_lat=23.0, center_lon=123.0,
+        core_radius_deg=2.0, annulus_inner_km=200.0, annulus_outer_km=900.0,
+    )
+    masked = cell_map * env_mask.astype(np.float64)
+    assert masked[W // 2, W // 2] == 0.0, "Core cell must be zero"
+    assert masked.sum() > 0.0, "Some annulus cells must be non-zero"
+
+
+def test_wind_along_signed_case_has_visualization_key():
+    """_case_summary must preserve visualization key from wind_along_signed case."""
+    case = {
+        "direction": "along", "patch_size": 3, "window_size": 7,
+        "core_size": 1, "stride": 2,
+        "sign_agreement_at_20": 0.5, "iou_pos_at_20": 0.3, "iou_neg_at_20": 0.2,
+        "iou_pos_at_30": 0.35, "iou_neg_at_30": 0.25,
+        "iou_pos_at_40": 0.4, "iou_neg_at_40": 0.28,
+        "sign_agreement_at_30": 0.55, "sign_agreement_at_40": 0.6,
+        "signed_spearman": 0.45, "levels_bottom_hpa": 925.0, "levels_top_hpa": 300.0,
+        "visualization": {
+            "meta": {"direction": "along", "patch_size": 3, "target_time_idx": 1,
+                     "topq_fraction": 0.2, "source": "wind_along_signed"},
+            "sign_map": {"lat_vals": [20.0], "lon_vals": [120.0],
+                         "sign_class_map": [[1]], "overlap_mask": [[False]],
+                         "sign_agreement_at_20": 0.5},
+            "scatter": {"x_patch_abs_scores": [0.1], "y_patch_abs_scores": [0.15],
+                        "spearman_rho": 0.45},
+        },
+    }
+    summary = _case_summary(case)
+    assert "visualization" in summary
+    assert summary["visualization"]["meta"]["source"] == "wind_along_signed"
+    assert "sign_map" in summary["visualization"]
+    assert "scatter" in summary["visualization"]
