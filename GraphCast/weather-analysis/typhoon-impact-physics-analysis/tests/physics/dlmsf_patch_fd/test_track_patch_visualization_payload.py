@@ -6,7 +6,11 @@ from typing import List
 import numpy as np
 import pytest
 
-from physics.dlmsf_patch_fd.patch_comparison import _build_case_visualization_payload
+from physics.dlmsf_patch_fd.patch_comparison import (
+    _build_case_visualization_payload,
+    _case_summary,
+    PatchAlignmentMetrics,
+)
 from shared.patch_geometry import CenteredWindow, PatchDefinition
 
 
@@ -264,3 +268,120 @@ class TestSignClassMap:
         assert mask[0, 0] is np.bool_(True)
         assert mask[0, 1] is np.bool_(True)
         assert mask[0, 2] is np.bool_(False)
+
+
+# ---------------------------------------------------------------------------
+# Task 2 tests: _case_summary must expose visualization payload
+# ---------------------------------------------------------------------------
+
+def _dummy_metrics() -> PatchAlignmentMetrics:
+    return PatchAlignmentMetrics(
+        direction="along",
+        patch_size=3,
+        n_patches=4,
+        pearson_r=0.6,
+        pearson_pval=0.1,
+        spearman_rho=0.7,
+        spearman_pval=0.05,
+        iou_topq=0.5,
+        topq_fraction=0.2,
+        topq_k=1,
+    )
+
+
+def _dummy_visualization_payload() -> dict:
+    return {
+        "meta": {"direction": "along", "patch_size": 3, "target_time_idx": 0, "topq_fraction": 0.2},
+        "overlap": {"spearman_rho": 0.7, "iou_at_20": 0.5, "ig_abs_map": [[1.0]], "dlmsf_abs_map": [[2.0]],
+                    "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
+        "scatter": {"x_patch_abs_scores": [1.0], "y_patch_abs_scores": [2.0], "spearman_rho": 0.7},
+        "sign_map": {"sign_class_map": [[1]], "sign_agreement_at_20": 1.0,
+                     "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
+        "deletion": None,
+    }
+
+
+def _dummy_deletion_summary() -> dict:
+    """Minimal DeletionCurveSummary-compatible dict that asdict() can reproduce."""
+    from physics.dlmsf_patch_fd.patch_comparison import DeletionCurveSummary
+    return DeletionCurveSummary(
+        step_fraction=[0.5, 1.0],
+        masked_fraction=[0.3, 0.6],
+        high_ig_delta=[0.5, 1.0],
+        low_ig_delta=[0.05, 0.1],
+        random_mean_delta=[0.2, 0.4],
+        high_ig_auc=0.6,
+        high_ig_aopc=0.57,
+        low_ig_auc=0.07,
+        low_ig_aopc=0.09,
+        random_mean_auc=0.2,
+        random_mean_aopc=0.19,
+        random_repeats=3,
+        seed=42,
+    )
+
+
+def _make_dummy_case(with_deletion: bool = False) -> dict:
+    return {
+        "direction": "along",
+        "patch_size": 3,
+        "window_size": 21,
+        "core_size": 3,
+        "stride": 2,
+        "ig": {
+            "full_scalar": 1.0,
+            "baseline_scalar": 0.5,
+            "lhs": 0.49,
+            "rhs": 0.50,
+            "rel_err": 0.02,
+        },
+        "metrics": _dummy_metrics(),
+        "track_diagnostics": {},
+        "plot": {},
+        "visualization": _dummy_visualization_payload(),
+        "deletion": _dummy_deletion_summary() if with_deletion else None,
+    }
+
+
+class TestCaseSummaryExposesVisualization:
+    """_case_summary() must expose visualization and deletion display fields."""
+
+    def test_case_summary_has_visualization_key(self):
+        summary = _case_summary(_make_dummy_case())
+        assert "visualization" in summary
+
+    def test_case_summary_visualization_meta_direction(self):
+        summary = _case_summary(_make_dummy_case())
+        assert summary["visualization"]["meta"]["direction"] == "along"
+
+    def test_case_summary_visualization_overlap_has_spearman(self):
+        summary = _case_summary(_make_dummy_case())
+        assert "spearman_rho" in summary["visualization"]["overlap"]
+
+    def test_case_summary_visualization_sign_map_has_agreement(self):
+        summary = _case_summary(_make_dummy_case())
+        assert "sign_agreement_at_20" in summary["visualization"]["sign_map"]
+
+    def test_case_summary_without_deletion_has_no_deletion_key(self):
+        summary = _case_summary(_make_dummy_case(with_deletion=False))
+        # deletion should be absent or None when not computed
+        assert summary.get("deletion") is None
+
+    def test_case_summary_with_deletion_exposes_aopc_fields(self):
+        summary = _case_summary(_make_dummy_case(with_deletion=True))
+        assert "deletion" in summary
+        del_summary = summary["deletion"]
+        for field in ("high_ig_aopc", "low_ig_aopc", "random_mean_aopc"):
+            assert field in del_summary, f"Missing deletion field: {field!r}"
+
+    def test_case_summary_visualization_deletion_wired_from_deletion(self):
+        """visualization['deletion'] must be populated when case['deletion'] exists."""
+        summary = _case_summary(_make_dummy_case(with_deletion=True))
+        vis_del = summary["visualization"]["deletion"]
+        assert vis_del is not None
+        assert "aopc_high" in vis_del
+        assert "aopc_random" in vis_del
+        assert "aopc_low" in vis_del
+        assert vis_del["aopc_high"] == pytest.approx(0.57)
+        assert vis_del["aopc_random"] == pytest.approx(0.19)
+        assert vis_del["aopc_low"] == pytest.approx(0.09)

@@ -694,6 +694,20 @@ def _run_deletion_validation(
 
 
 def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
+    visualization = dict(case["visualization"])
+    # Wire deletion display fields into visualization["deletion"]
+    if case.get("deletion") is not None:
+        d = case["deletion"]
+        visualization["deletion"] = {
+            "masked_fraction": list(d.masked_fraction),
+            "high_ig_delta": list(d.high_ig_delta),
+            "random_mean_delta": list(d.random_mean_delta),
+            "low_ig_delta": list(d.low_ig_delta),
+            "aopc_high": float(d.high_ig_aopc),
+            "aopc_random": float(d.random_mean_aopc),
+            "aopc_low": float(d.low_ig_aopc),
+        }
+
     summary = {
         "direction": case["direction"],
         "patch_size": int(case["patch_size"]),
@@ -708,6 +722,7 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
         "metrics": asdict(case["metrics"]),
         "track_diagnostics": dict(case["track_diagnostics"]),
         "plot": dict(case["plot"]),
+        "visualization": visualization,
     }
     if case.get("deletion") is not None:
         summary["deletion"] = asdict(case["deletion"])
@@ -862,6 +877,20 @@ def run_track_patch_analysis(
             dlmsf_abs_map=dlmsf_result.S_abs_map,
             dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
             topq_fraction=topk_fraction,
+        ),
+        "visualization": _build_case_visualization_payload(
+            window=window,
+            patches=ig_patch["patches"],
+            direction=direction,
+            patch_size=main_patch_size,
+            target_time_idx=runtime_cfg.target_time_idx,
+            topq_fraction=topk_fraction,
+            ig_abs_map=ig_patch["abs_map"],
+            ig_abs_scores=ig_patch["abs_scores"],
+            ig_signed_scores=ig_patch["signed_scores"],
+            dlmsf_abs_map=dlmsf_result.S_abs_map,
+            dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
+            dlmsf_signed_scores=dlmsf_result.patch_parallel_scores,
         ),
         "ig": {
             **ig_maps,
