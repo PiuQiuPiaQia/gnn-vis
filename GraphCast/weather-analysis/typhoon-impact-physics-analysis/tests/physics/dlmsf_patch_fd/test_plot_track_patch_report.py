@@ -1,30 +1,67 @@
 from __future__ import annotations
 
 import json
+import math
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 
 from physics.dlmsf_patch_fd.plot_track_patch_report import write_track_patch_figures
 
 
+# ---------------------------------------------------------------------------
+# Dummy report factory
+# ---------------------------------------------------------------------------
+
+def _dummy_visualization_payload():
+    """Minimal visualization payload matching the four-figure schema."""
+    lat_vals = [10.0, 11.0, 12.0]
+    lon_vals = [120.0, 121.0, 122.0]
+    shape33 = [[0.0] * 3 for _ in range(3)]
+    mask33 = [[False, True, False], [True, False, False], [False, False, True]]
+    return {
+        "meta": {
+            "direction": "along",
+            "patch_size": 3,
+            "target_time_idx": 0,
+            "topq_fraction": 0.2,
+        },
+        "overlap": {
+            "lat_vals": lat_vals,
+            "lon_vals": lon_vals,
+            "ig_abs_map": [[0.2, 0.4, 0.1], [0.5, float("nan"), 0.3], [0.1, 0.2, 0.6]],
+            "dlmsf_abs_map": [[0.1, 0.6, 0.2], [0.4, float("nan"), 0.2], [0.2, 0.3, 0.5]],
+            "overlap_mask": mask33,
+            "spearman_rho": 0.7,
+            "iou_at_20": 0.5,
+        },
+        "scatter": {
+            "x_patch_abs_scores": [0.6, 0.4, 0.2, 0.3, 0.5],
+            "y_patch_abs_scores": [0.5, 0.3, 0.2, 0.4, 0.6],
+            "spearman_rho": 0.7,
+        },
+        "sign_map": {
+            "lat_vals": lat_vals,
+            "lon_vals": lon_vals,
+            "sign_class_map": [[0, 1, 2], [3, 0, 1], [2, 3, 0]],
+            "sign_agreement_at_20": 0.75,
+            "overlap_mask": mask33,
+        },
+        "deletion": {
+            "masked_fraction": [0.1, 0.3, 0.6, 1.0],
+            "high_ig_delta": [0.2, 0.4, 0.7, 1.0],
+            "low_ig_delta": [0.05, 0.08, 0.1, 0.15],
+            "random_mean_delta": [0.1, 0.15, 0.22, 0.3],
+            "aopc_high": 0.575,
+            "aopc_random": 0.1925,
+            "aopc_low": 0.095,
+        },
+    }
+
+
 def _dummy_report():
-    base_map = [
-        [1008.0, 1007.0, 1006.5],
-        [1007.5, 1006.0, 1005.5],
-        [1008.5, 1007.2, 1006.8],
-    ]
-    ig_map = [
-        [0.2, 0.4, 0.1],
-        [0.5, float("nan"), 0.3],
-        [0.1, 0.2, 0.6],
-    ]
-    dlmsf_map = [
-        [0.1, 0.6, 0.2],
-        [0.4, float("nan"), 0.2],
-        [0.2, 0.3, 0.5],
-    ]
     return {
         "source_pipeline": "swe",
         "main_case": "along_p3",
@@ -43,41 +80,8 @@ def _dummy_report():
                     "topq_fraction": 0.2,
                     "topq_k": 4,
                 },
-                "plot": {
-                    "environment_field": "mean_sea_level_pressure",
-                    "lat_vals": [10.0, 11.0, 12.0],
-                    "lon_vals": [120.0, 121.0, 122.0],
-                    "core_mask": [
-                        [False, False, False],
-                        [False, True, False],
-                        [False, False, False],
-                    ],
-                    "environment_map": base_map,
-                    "ig_abs_map": ig_map,
-                    "dlmsf_abs_map": dlmsf_map,
-                    "ig_topq_mask": [
-                        [False, True, False],
-                        [True, False, False],
-                        [False, False, True],
-                    ],
-                    "dlmsf_topq_mask": [
-                        [False, True, False],
-                        [False, False, False],
-                        [False, True, True],
-                    ],
-                    "overlap_mask": [
-                        [False, True, False],
-                        [False, False, False],
-                        [False, False, True],
-                    ],
-                    "union_mask": [
-                        [False, True, False],
-                        [True, False, False],
-                        [False, True, True],
-                    ],
-                    "topq_fraction": 0.2,
-                    "topq_k": 4,
-                },
+                "plot": {},
+                "visualization": _dummy_visualization_payload(),
                 "deletion": {
                     "masked_fraction": [0.1, 0.3, 0.6, 1.0],
                     "high_ig_delta": [0.2, 0.4, 0.7, 1.0],
@@ -95,18 +99,27 @@ def _dummy_report():
     }
 
 
+# ---------------------------------------------------------------------------
+# Tests: four fixed output filenames
+# ---------------------------------------------------------------------------
+
+EXPECTED_NAMES = [
+    "dlmsf_along_overlap_q20_t0.png",
+    "dlmsf_along_scatter_t0.png",
+    "deletion_validation_along_p3.png",
+    "dlmsf_along_sign_map_t0.png",
+]
+
+
 def test_write_track_patch_figures_from_dict(tmp_path):
     outputs = write_track_patch_figures(
         _dummy_report(),
         output_dir=tmp_path,
-        prefix="dlmsf_track_patch",
+        prefix="dlmsf_track_patch",  # prefix is now ignored for filename
         dpi=100,
     )
 
-    assert [path.name for path in outputs] == [
-        "dlmsf_track_patch_main_case.png",
-        "dlmsf_track_patch_deletion.png",
-    ]
+    assert [path.name for path in outputs] == EXPECTED_NAMES
     for path in outputs:
         assert path.exists()
         assert path.stat().st_size > 0
@@ -116,9 +129,58 @@ def test_write_track_patch_figures_from_json_path(tmp_path):
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(_dummy_report()), encoding="utf-8")
 
-    outputs = write_track_patch_figures(report_path, prefix="track_patch_plot", dpi=100)
+    outputs = write_track_patch_figures(report_path, prefix="any_old_prefix", dpi=100)
 
-    assert [path.name for path in outputs] == [
-        "track_patch_plot_main_case.png",
-        "track_patch_plot_deletion.png",
-    ]
+    assert [path.name for path in outputs] == EXPECTED_NAMES
+
+
+def test_prefix_does_not_change_fixed_output_names(tmp_path):
+    """prefix argument must be ignored for filenames."""
+    outputs = write_track_patch_figures(
+        _dummy_report(), output_dir=tmp_path, prefix="custom", dpi=100
+    )
+    assert outputs[0].name == "dlmsf_along_overlap_q20_t0.png"
+
+
+def test_write_track_patch_figures_returns_exactly_four_files(tmp_path):
+    outputs = write_track_patch_figures(_dummy_report(), output_dir=tmp_path, dpi=100)
+    assert len(outputs) == 4
+
+
+# ---------------------------------------------------------------------------
+# Tests: Pearson must not appear in rendered text annotations
+# ---------------------------------------------------------------------------
+
+def test_overlap_figure_annotation_does_not_contain_pearson(tmp_path):
+    """Overlap figure must only show Spearman and IoU, never Pearson."""
+    from physics.dlmsf_patch_fd.plot_track_patch_report import _format_overlap_annotation
+    text = _format_overlap_annotation(spearman_rho=0.72, iou_at_20=0.45)
+    assert "Pearson" not in text
+    assert "pearson" not in text.lower()
+    assert "0.72" in text or "ρ" in text or "rho" in text.lower()
+
+
+def test_scatter_figure_annotation_does_not_contain_pearson(tmp_path):
+    """Scatter figure must only show Spearman, never Pearson."""
+    from physics.dlmsf_patch_fd.plot_track_patch_report import _format_scatter_annotation
+    text = _format_scatter_annotation(spearman_rho=0.65)
+    assert "Pearson" not in text
+    assert "pearson" not in text.lower()
+
+
+def test_deletion_figure_annotation_does_not_contain_auc(tmp_path):
+    """Deletion figure annotation must not include AUC."""
+    from physics.dlmsf_patch_fd.plot_track_patch_report import _format_deletion_annotation
+    text = _format_deletion_annotation(aopc_high=0.57, aopc_random=0.19, aopc_low=0.09)
+    assert "AUC" not in text
+    assert "auc" not in text.lower()
+    assert "0.57" in text  # AOPC values are present
+
+
+def test_sign_map_annotation_does_not_contain_pearson(tmp_path):
+    """Sign map annotation must only show Sign agreement, never Pearson."""
+    from physics.dlmsf_patch_fd.plot_track_patch_report import _format_sign_map_annotation
+    text = _format_sign_map_annotation(sign_agreement_at_20=0.80)
+    assert "Pearson" not in text
+    assert "pearson" not in text.lower()
+    assert "0.80" in text or "80" in text
