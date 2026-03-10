@@ -235,3 +235,33 @@ def test_wind_ig_projection_uses_pressure_weights():
     assert abs(result.mean() - expected) < 1e-4, (
         f"Expected pressure-weighted mean ≈ {expected:.4f}, got {result.mean():.4f}"
     )
+
+
+def test_wind_along_signed_case_has_multi_threshold_metrics():
+    """compute_sign_agreement and compute_topk_iou_signed work for k30 and k40."""
+    from physics.dlmsf_patch_fd.patch_comparison import compute_topk_iou_signed, compute_sign_agreement
+
+    rng = np.random.default_rng(42)
+    n = 50
+    a = rng.standard_normal(n)
+    b = rng.standard_normal(n)
+    for frac in (0.30, 0.40):
+        k = max(1, int(np.ceil(frac * n)))
+        iou_pos = compute_topk_iou_signed(a, b, k=k, sign="pos")
+        iou_neg = compute_topk_iou_signed(a, b, k=k, sign="neg")
+        sign_agr = compute_sign_agreement(a, b, k=k)
+        assert 0.0 <= iou_pos <= 1.0
+        assert 0.0 <= iou_neg <= 1.0
+        assert 0.0 <= sign_agr <= 1.0
+
+
+def test_signed_spearman_direction():
+    """Signed Spearman should be positive for positively correlated signed scores."""
+    import scipy.stats
+
+    a = np.array([1.0, -2.0, 3.0, -4.0, 5.0])
+    b = np.array([0.5, -1.0, 2.0, -3.0, 4.0])
+    a_rank = scipy.stats.rankdata(a)
+    b_rank = scipy.stats.rankdata(b)
+    rho = np.corrcoef(a_rank, b_rank)[0, 1]
+    assert rho > 0.9

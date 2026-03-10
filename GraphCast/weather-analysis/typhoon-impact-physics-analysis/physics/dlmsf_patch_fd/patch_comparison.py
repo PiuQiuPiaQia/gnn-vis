@@ -642,8 +642,12 @@ def _project_wind_ig_along_track(
 
     # Match DLMSF convention: select a single target time before level filtering
     if "time" in ig_u_da.dims:
+        if ig_u_da.sizes["time"] <= time_idx:
+            raise ValueError(
+                f"wind IG 'time' dimension has {ig_u_da.sizes['time']} slice(s); "
+                f"cannot select time_idx={time_idx} (DLMSF requires at least time_idx+1 slices)."
+            )
         ig_u_da = ig_u_da.isel(time=time_idx)
-    if "time" in ig_v_da.dims:
         ig_v_da = ig_v_da.isel(time=time_idx)
 
     # Filter level band
@@ -656,6 +660,8 @@ def _project_wind_ig_along_track(
         ig_u_da = ig_u_da.isel(level=level_mask)
         ig_v_da = ig_v_da.isel(level=level_mask)
         level_vals_sel = np.asarray(ig_u_da.coords["level"].values, dtype=np.float64)
+        ig_u_da = ig_u_da.transpose("level", "lat", "lon")
+        ig_v_da = ig_v_da.transpose("level", "lat", "lon")
 
     # Project onto d_hat
     ig_u_np = np.asarray(ig_u_da.values, dtype=np.float64)
@@ -689,17 +695,18 @@ def _project_wind_ig_along_track(
     else:
         ig_along_2d = ig_u_np * d_u + ig_v_np * d_v
 
-    lat_vals_global = np.asarray(ig_u_da.coords["lat"].values, dtype=np.float64)
-    lon_vals_global = np.asarray(ig_u_da.coords["lon"].values, dtype=np.float64)
-    row_idx = np.asarray(
-        [int(np.where(np.isclose(lat_vals_global, lat_val))[0][0]) for lat_val in window.lat_vals],
-        dtype=np.int64,
+    ig_along_da2d = xarray.DataArray(
+        np.asarray(ig_along_2d, dtype=np.float64),
+        dims=("lat", "lon"),
+        coords={"lat": ig_u_da.coords["lat"], "lon": ig_u_da.coords["lon"]},
     )
-    col_idx = np.asarray(
-        [int(np.where(np.isclose(lon_vals_global, lon_val))[0][0]) for lon_val in window.lon_vals],
-        dtype=np.int64,
+    signed_cell_map = (
+        ig_along_da2d
+        .sel(lat=window.lat_vals, method="nearest")
+        .sel(lon=window.lon_vals, method="nearest")
+        .transpose("lat", "lon")
+        .values
     )
-    signed_cell_map = np.asarray(ig_along_2d, dtype=np.float64)[row_idx[:, None], col_idx[None, :]]
     return signed_cell_map
 
 
@@ -1206,7 +1213,11 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
             summary[key] = case[key]
 
     # E2: wind_along_signed fields
-    for key in ("sign_agreement_at_20", "iou_pos_at_20", "iou_neg_at_20",
+    for key in ("sign_agreement_at_20", "sign_agreement_at_30", "sign_agreement_at_40",
+                "iou_pos_at_20", "iou_neg_at_20",
+                "iou_pos_at_30", "iou_neg_at_30",
+                "iou_pos_at_40", "iou_neg_at_40",
+                "signed_spearman",
                 "levels_bottom_hpa", "levels_top_hpa"):
         if key in case:
             summary[key] = case[key]
@@ -1462,14 +1473,39 @@ def run_track_patch_analysis(
         dlmsf_signed = dlmsf_result.patch_parallel_scores
         n_patches_total = len(wind_patch["patches"])
         k20 = max(1, int(math.ceil(0.20 * n_patches_total)))
-        wind_sign_agreement = compute_sign_agreement(
+        k30 = max(1, int(math.ceil(0.30 * n_patches_total)))
+        k40 = max(1, int(math.ceil(0.40 * n_patches_total)))
+        wind_sign_agreement_20 = compute_sign_agreement(
             wind_patch["signed_scores"], dlmsf_signed, k=k20
         )
-        wind_iou_pos = compute_topk_iou_signed(
+        wind_sign_agreement_30 = compute_sign_agreement(
+            wind_patch["signed_scores"], dlmsf_signed, k=k30
+        )
+        wind_sign_agreement_40 = compute_sign_agreement(
+            wind_patch["signed_scores"], dlmsf_signed, k=k40
+        )
+        wind_iou_pos_20 = compute_topk_iou_signed(
             wind_patch["signed_scores"], dlmsf_signed, k=k20, sign="pos"
         )
-        wind_iou_neg = compute_topk_iou_signed(
+        wind_iou_neg_20 = compute_topk_iou_signed(
             wind_patch["signed_scores"], dlmsf_signed, k=k20, sign="neg"
+        )
+        wind_iou_pos_30 = compute_topk_iou_signed(
+            wind_patch["signed_scores"], dlmsf_signed, k=k30, sign="pos"
+        )
+        wind_iou_neg_30 = compute_topk_iou_signed(
+            wind_patch["signed_scores"], dlmsf_signed, k=k30, sign="neg"
+        )
+        wind_iou_pos_40 = compute_topk_iou_signed(
+            wind_patch["signed_scores"], dlmsf_signed, k=k40, sign="pos"
+        )
+        wind_iou_neg_40 = compute_topk_iou_signed(
+            wind_patch["signed_scores"], dlmsf_signed, k=k40, sign="neg"
+        )
+        wind_signed_spearman, _ = _safe_corr(
+            scipy.stats.spearmanr,
+            np.asarray(wind_patch["signed_scores"], dtype=np.float64),
+            np.asarray(dlmsf_signed, dtype=np.float64),
         )
         cases[wind_along_key] = {
             "direction": direction,
@@ -1482,16 +1518,26 @@ def run_track_patch_analysis(
             "wind_patch_signed_scores": wind_patch["signed_scores"],
             "wind_patch_abs_scores": wind_patch["abs_scores"],
             "dlmsf_signed_scores": dlmsf_signed,
-            "sign_agreement_at_20": float(wind_sign_agreement) if wind_sign_agreement == wind_sign_agreement else None,
-            "iou_pos_at_20": float(wind_iou_pos),
-            "iou_neg_at_20": float(wind_iou_neg),
+            "sign_agreement_at_20": float(wind_sign_agreement_20) if wind_sign_agreement_20 == wind_sign_agreement_20 else None,
+            "sign_agreement_at_30": float(wind_sign_agreement_30) if wind_sign_agreement_30 == wind_sign_agreement_30 else None,
+            "sign_agreement_at_40": float(wind_sign_agreement_40) if wind_sign_agreement_40 == wind_sign_agreement_40 else None,
+            "iou_pos_at_20": float(wind_iou_pos_20),
+            "iou_neg_at_20": float(wind_iou_neg_20),
+            "iou_pos_at_30": float(wind_iou_pos_30),
+            "iou_neg_at_30": float(wind_iou_neg_30),
+            "iou_pos_at_40": float(wind_iou_pos_40),
+            "iou_neg_at_40": float(wind_iou_neg_40),
+            "signed_spearman": float(wind_signed_spearman),
             "levels_bottom_hpa": levels_bottom,
             "levels_top_hpa": levels_top,
         }
         print(
             f"[Track-Patch] {wind_along_key}: "
-            f"sign_agr@20%={wind_sign_agreement:.3f}  "
-            f"iou_pos@20%={wind_iou_pos:.3f}  iou_neg@20%={wind_iou_neg:.3f}"
+            f"sign_agr@20%={wind_sign_agreement_20:.3f}  "
+            f"sign_agr@30%={wind_sign_agreement_30:.3f}  "
+            f"sign_agr@40%={wind_sign_agreement_40:.3f}  "
+            f"spearman_signed={wind_signed_spearman:+.3f}  "
+            f"iou_pos@20%={wind_iou_pos_20:.3f}  iou_neg@20%={wind_iou_neg_20:.3f}"
         )
 
     # -----------------------------------------------------------------------
