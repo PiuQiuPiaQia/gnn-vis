@@ -1097,48 +1097,109 @@ def _run_deletion_validation(
 
 
 def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
-    visualization = dict(case["visualization"])
-    # Wire deletion display fields into visualization["deletion"]
-    if case.get("deletion") is not None:
-        d = case["deletion"]
-        visualization["deletion"] = {
-            "masked_fraction": list(d.masked_fraction),
-            "high_ig_delta": list(d.high_ig_delta),
-            "random_mean_delta": list(d.random_mean_delta),
-            "low_ig_delta": list(d.low_ig_delta),
-            "aopc_high": float(d.high_ig_aopc),
-            "aopc_random": float(d.random_mean_aopc),
-            "aopc_low": float(d.low_ig_aopc),
-        }
-
-    summary = {
+    # Build base summary from fields common to all cases
+    summary: Dict[str, Any] = {
         "direction": case["direction"],
         "patch_size": int(case["patch_size"]),
         "window_size": int(case["window_size"]),
         "core_size": int(case["core_size"]),
         "stride": int(case["stride"]),
-        "track_scalar_full": float(case["ig"]["full_scalar"]),
-        "track_scalar_baseline": float(case["ig"]["baseline_scalar"]),
-        "ig_completeness_lhs": float(case["ig"]["lhs"]),
-        "ig_completeness_rhs": float(case["ig"]["rhs"]),
-        "ig_completeness_rel_err": float(case["ig"]["rel_err"]),
-        "metrics": asdict(case["metrics"]),
-        "track_diagnostics": dict(case["track_diagnostics"]),
-        "plot": dict(case["plot"]),
-        "visualization": visualization,
     }
+
+    # Fields only present on the main IG case
+    if "ig" in case:
+        summary["track_scalar_full"] = float(case["ig"]["full_scalar"])
+        summary["track_scalar_baseline"] = float(case["ig"]["baseline_scalar"])
+        summary["ig_completeness_lhs"] = float(case["ig"]["lhs"])
+        summary["ig_completeness_rhs"] = float(case["ig"]["rhs"])
+        summary["ig_completeness_rel_err"] = float(case["ig"]["rel_err"])
+    if "metrics" in case:
+        summary["metrics"] = asdict(case["metrics"])
+    if "track_diagnostics" in case:
+        summary["track_diagnostics"] = dict(case["track_diagnostics"])
+    # "plot" is intentionally omitted — it duplicates visualization and is never read from JSON
+
+    # Visualization payload (main case only); needed by plot_track_patch_report.py
+    if "visualization" in case:
+        visualization = dict(case["visualization"])
+        # Wire deletion display fields into visualization["deletion"]
+        if case.get("deletion") is not None:
+            d = case["deletion"]
+            visualization["deletion"] = {
+                "masked_fraction": list(d.masked_fraction),
+                "high_ig_delta": list(d.high_ig_delta),
+                "random_mean_delta": list(d.random_mean_delta),
+                "low_ig_delta": list(d.low_ig_delta),
+                "aopc_high": float(d.high_ig_aopc),
+                "aopc_random": float(d.random_mean_aopc),
+                "aopc_low": float(d.low_ig_aopc),
+            }
+        summary["visualization"] = visualization
+
+    # deletion: scalars only — curve arrays live in visualization.deletion for plotting
     if case.get("deletion") is not None:
-        summary["deletion"] = asdict(case["deletion"])
+        d = case["deletion"]
+        summary["deletion"] = {
+            "high_ig_auc": float(d.high_ig_auc),
+            "high_ig_aopc": float(d.high_ig_aopc),
+            "low_ig_auc": float(d.low_ig_auc),
+            "low_ig_aopc": float(d.low_ig_aopc),
+            "random_mean_auc": float(d.random_mean_auc),
+            "random_mean_aopc": float(d.random_mean_aopc),
+            "random_repeats": int(d.random_repeats),
+            "seed": int(d.seed),
+            "dlmsf_high_auc": float(d.dlmsf_high_auc),
+            "dlmsf_high_aopc": float(d.dlmsf_high_aopc),
+        }
+
+    # physical_aopc: scalars only — cumulative curve arrays not needed downstream
     if case.get("physical_aopc") is not None:
-        summary["physical_aopc"] = dict(case["physical_aopc"])
+        p = case["physical_aopc"]
+        summary["physical_aopc"] = {
+            "aopc_dlmsf": float(p["aopc_dlmsf"]),
+            "aopc_ig": float(p["aopc_ig"]),
+            "aopc_random_mean": float(p["aopc_random_mean"]),
+            "n_patches": int(p["n_patches"]),
+        }
+
+    # E1: ig_phys_vs_dlmsf_fd fields
+    for key in ("j_along_analytical", "j_phys_baseline", "pearson_r", "spearman_rho",
+                "iou_topq", "topq_fraction"):
+        if key in case:
+            summary[key] = case[key]
+
+    # E2: wind_along_signed fields
+    for key in ("sign_agreement_at_20", "iou_pos_at_20", "iou_neg_at_20",
+                "levels_bottom_hpa", "levels_top_hpa"):
+        if key in case:
+            summary[key] = case[key]
+
     return summary
+
+
+def _slim_report_for_json(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of *report* with large array payloads stripped out.
+
+    The ``visualization`` section of each case contains 2-D maps and per-patch
+    arrays that are only needed for rendering figures.  Those arrays live in the
+    in-memory result returned by ``run_track_patch_analysis`` and are passed
+    directly to ``write_track_patch_figures``; they do not need to be persisted
+    to disk.  All scalar metrics are preserved in ``metrics``, ``deletion``, and
+    ``physical_aopc``.
+    """
+    import copy
+
+    slim = copy.deepcopy(report)
+    for case in slim.get("cases", {}).values():
+        case.pop("visualization", None)
+    return slim
 
 
 def write_patch_analysis_report(report: Dict[str, Any], output_path: Path) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2),
+        json.dumps(_slim_report_for_json(report), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 

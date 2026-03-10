@@ -779,7 +779,7 @@ def run_physics_comparison() -> Dict[str, Any]:
         track_patch_json_path = RESULTS_DIR / "dlmsf_track_patch_alignment.json"
         write_patch_analysis_report(track_patch_analysis["summary"], track_patch_json_path)
         write_track_patch_figures(
-            track_patch_json_path,
+            track_patch_analysis["summary"],
             output_dir=RESULTS_DIR,
             prefix="dlmsf_track_patch",
             dpi=dpi,
