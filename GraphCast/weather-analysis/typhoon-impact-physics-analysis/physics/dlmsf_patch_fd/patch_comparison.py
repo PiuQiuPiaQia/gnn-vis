@@ -989,12 +989,16 @@ def _compute_single_deletion_curve(
     direction_mode: str,
     softmin_temperature: float,
     base_scalar: float,
+    label: str = "",
 ) -> Dict[str, Any]:
     union_mask = np.zeros(window.shape, dtype=bool)
     step_fraction: List[float] = []
     masked_fraction: List[float] = []
     deltas: List[float] = []
     valid_env_cells = int((~window.core_mask).sum())
+    n_total = len(order)
+    print_every = max(1, n_total // 10)
+    _label = f"[Deletion/{label}]" if label else "[Deletion]"
 
     for step, patch_idx in enumerate(order.tolist(), start=1):
         union_mask |= np.asarray(patches[int(patch_idx)].mask, dtype=bool)
@@ -1015,8 +1019,10 @@ def _compute_single_deletion_curve(
             softmin_temperature=softmin_temperature,
         )
         deltas.append(float(base_scalar - new_scalar))
-        step_fraction.append(float(step) / float(len(order)))
+        step_fraction.append(float(step) / float(n_total))
         masked_fraction.append(float(union_mask.sum()) / float(max(valid_env_cells, 1)))
+        if step % print_every == 0 or step == n_total:
+            print(f"{_label}  {step}/{n_total}  Δ={deltas[-1]:+.4f}", flush=True)
 
     if deltas:
         auc = float(np.trapz(np.asarray(deltas, dtype=np.float64), np.asarray(masked_fraction, dtype=np.float64)))
@@ -1073,6 +1079,7 @@ def _run_deletion_validation(
         direction_mode="along",
         softmin_temperature=softmin_temperature,
         base_scalar=base_scalar,
+        label="high_ig",
     )
     low_curve = _compute_single_deletion_curve(
         context=context,
@@ -1086,13 +1093,15 @@ def _run_deletion_validation(
         direction_mode="along",
         softmin_temperature=softmin_temperature,
         base_scalar=base_scalar,
+        label="low_ig",
     )
 
     rng = np.random.default_rng(seed)
     random_deltas: List[np.ndarray] = []
     random_auc: List[float] = []
     random_aopc: List[float] = []
-    for _ in range(max(1, int(random_repeats))):
+    n_random = max(1, int(random_repeats))
+    for i in range(n_random):
         order = rng.permutation(len(patches))
         curve = _compute_single_deletion_curve(
             context=context,
@@ -1106,6 +1115,7 @@ def _run_deletion_validation(
             direction_mode="along",
             softmin_temperature=softmin_temperature,
             base_scalar=base_scalar,
+            label=f"random_{i + 1}/{n_random}",
         )
         random_deltas.append(np.asarray(curve["deltas"], dtype=np.float64))
         random_auc.append(float(curve["auc"]))
@@ -1131,6 +1141,7 @@ def _run_deletion_validation(
             direction_mode="along",
             softmin_temperature=softmin_temperature,
             base_scalar=base_scalar,
+            label="dlmsf_high",
         )
 
     return DeletionCurveSummary(
