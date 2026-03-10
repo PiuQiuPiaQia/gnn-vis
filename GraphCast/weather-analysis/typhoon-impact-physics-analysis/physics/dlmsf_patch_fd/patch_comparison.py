@@ -592,6 +592,7 @@ def _project_wind_ig_along_track(
     d_hat: tuple,
     levels_bottom_hpa: float = 925.0,
     levels_top_hpa: float = 300.0,
+    time_idx: int = 1,
 ) -> np.ndarray:
     """Project wind-component IG onto the along-track direction within a level band.
 
@@ -639,7 +640,14 @@ def _project_wind_ig_along_track(
     if "batch" in ig_v_da.dims:
         ig_v_da = ig_v_da.isel(batch=0)
 
+    # Match DLMSF convention: select a single target time before level filtering
+    if "time" in ig_u_da.dims:
+        ig_u_da = ig_u_da.isel(time=time_idx)
+    if "time" in ig_v_da.dims:
+        ig_v_da = ig_v_da.isel(time=time_idx)
+
     # Filter level band
+    level_vals_sel = None
     if "level" in ig_u_da.dims:
         lo = min(levels_top_hpa, levels_bottom_hpa)
         hi = max(levels_top_hpa, levels_bottom_hpa)
@@ -647,22 +655,51 @@ def _project_wind_ig_along_track(
         level_mask = (level_vals >= lo) & (level_vals <= hi)
         ig_u_da = ig_u_da.isel(level=level_mask)
         ig_v_da = ig_v_da.isel(level=level_mask)
+        level_vals_sel = np.asarray(ig_u_da.coords["level"].values, dtype=np.float64)
 
     # Project onto d_hat
-    ig_along_da = ig_u_da * d_u + ig_v_da * d_v
+    ig_u_np = np.asarray(ig_u_da.values, dtype=np.float64)
+    ig_v_np = np.asarray(ig_v_da.values, dtype=np.float64)
 
-    # Sum over all non-spatial dimensions
-    reduce_dims = [dim for dim in ig_along_da.dims if dim not in {"lat", "lon"}]
-    if reduce_dims:
-        ig_along_da = ig_along_da.sum(dim=reduce_dims)
-    ig_along_latlon = ig_along_da.transpose("lat", "lon")
+    if "level" in ig_u_da.dims:
+        assert level_vals_sel is not None
+        n_sel = int(len(level_vals_sel))
+        weights = np.zeros(n_sel, dtype=np.float64)
+        if n_sel == 0:
+            raise ValueError(
+                f"No levels found in {levels_top_hpa}–{levels_bottom_hpa} hPa range"
+            )
+        if n_sel == 1:
+            weights[0] = 1.0
+        else:
+            for idx in range(n_sel):
+                if idx == 0:
+                    weights[idx] = 0.5 * abs(float(level_vals_sel[1]) - float(level_vals_sel[0]))
+                elif idx == n_sel - 1:
+                    weights[idx] = 0.5 * abs(float(level_vals_sel[idx]) - float(level_vals_sel[idx - 1]))
+                else:
+                    weights[idx] = 0.5 * (
+                        abs(float(level_vals_sel[idx + 1]) - float(level_vals_sel[idx]))
+                        + abs(float(level_vals_sel[idx]) - float(level_vals_sel[idx - 1]))
+                    )
+            weights /= weights.sum()
 
-    # Extract window subgrid using numpy outer-product indexing
-    ig_np = np.asarray(ig_along_latlon.values, dtype=np.float64)
-    signed_cell_map = ig_np[
-        window.lat_indices[:, None],
-        window.lon_indices[None, :],
-    ]
+        ig_along_3d = ig_u_np * d_u + ig_v_np * d_v
+        ig_along_2d = np.einsum("l,lij->ij", weights, ig_along_3d)
+    else:
+        ig_along_2d = ig_u_np * d_u + ig_v_np * d_v
+
+    lat_vals_global = np.asarray(ig_u_da.coords["lat"].values, dtype=np.float64)
+    lon_vals_global = np.asarray(ig_u_da.coords["lon"].values, dtype=np.float64)
+    row_idx = np.asarray(
+        [int(np.where(np.isclose(lat_vals_global, lat_val))[0][0]) for lat_val in window.lat_vals],
+        dtype=np.int64,
+    )
+    col_idx = np.asarray(
+        [int(np.where(np.isclose(lon_vals_global, lon_val))[0][0]) for lon_val in window.lon_vals],
+        dtype=np.int64,
+    )
+    signed_cell_map = np.asarray(ig_along_2d, dtype=np.float64)[row_idx[:, None], col_idx[None, :]]
     return signed_cell_map
 
 
@@ -1412,6 +1449,7 @@ def run_track_patch_analysis(
             d_hat=track_ref.along_hat,
             levels_bottom_hpa=levels_bottom,
             levels_top_hpa=levels_top,
+            time_idx=1,
         )
         wind_abs_cell_map = np.abs(wind_signed_cell_map)
         wind_patch = _patch_scores_from_maps(

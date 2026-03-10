@@ -14,16 +14,23 @@ from physics.dlmsf_patch_fd.patch_comparison import _project_wind_ig_along_track
 from shared.patch_geometry import CenteredWindow
 
 
-def _make_window(shape=(2, 3)) -> CenteredWindow:
-    n_lat, n_lon = shape
+def _make_window(shape=(2, 3), *, lat_vals=None, lon_vals=None) -> CenteredWindow:
+    if isinstance(shape, int):
+        n_lat = n_lon = shape
+    else:
+        n_lat, n_lon = shape
+    if lat_vals is None:
+        lat_vals = np.linspace(10.0, 10.0 + n_lat - 1, n_lat)
+    if lon_vals is None:
+        lon_vals = np.linspace(120.0, 120.0 + n_lon - 1, n_lon)
     return CenteredWindow(
         lat_indices=np.arange(n_lat, dtype=np.int64),
         lon_indices=np.arange(n_lon, dtype=np.int64),
-        lat_vals=np.linspace(10.0, 10.0 + n_lat - 1, n_lat),
-        lon_vals=np.linspace(120.0, 120.0 + n_lon - 1, n_lon),
+        lat_vals=np.asarray(lat_vals, dtype=np.float64),
+        lon_vals=np.asarray(lon_vals, dtype=np.float64),
         center_row=n_lat // 2,
         center_col=n_lon // 2,
-        core_mask=np.zeros(shape, dtype=bool),
+        core_mask=np.zeros((n_lat, n_lon), dtype=bool),
     )
 
 
@@ -78,9 +85,9 @@ class TestProjectWindIgAlongTrack:
             levels_bottom_hpa=925.0,
             levels_top_hpa=300.0,
         )
-        # Sum over 4 levels, each u=1, d̂_u=1 → 4.0 per cell
+        # Pressure weights are normalized; constant per-level IG remains 1.0 per cell
         assert result.shape == (2, 3)
-        np.testing.assert_allclose(result, np.full((2, 3), 4.0))
+        np.testing.assert_allclose(result, np.full((2, 3), 1.0))
 
     def test_due_north_projects_only_v(self):
         """d̂=(0,1): signed_cell_map = sum over levels of ig_v."""
@@ -97,8 +104,8 @@ class TestProjectWindIgAlongTrack:
             levels_bottom_hpa=925.0,
             levels_top_hpa=300.0,
         )
-        # ig_u * 0 + ig_v * 1 = 2; 4 levels → 8.0 per cell
-        np.testing.assert_allclose(result, np.full((2, 3), 8.0))
+        # Pressure weights are normalized; constant per-level IG remains 2.0 per cell
+        np.testing.assert_allclose(result, np.full((2, 3), 2.0))
 
     def test_level_filter_excludes_out_of_range(self):
         """Only levels in [300, 925] hPa are summed."""
@@ -123,8 +130,8 @@ class TestProjectWindIgAlongTrack:
             levels_bottom_hpa=925.0,
             levels_top_hpa=300.0,
         )
-        # Only levels 925 (value=1) and 300 (value=1) kept → sum=2 per cell
-        np.testing.assert_allclose(result, np.full((2, 3), 2.0))
+        # Only levels 925 and 300 are kept; normalized trapezoid weights preserve value=1
+        np.testing.assert_allclose(result, np.full((2, 3), 1.0))
 
     def test_negative_values_give_negative_projection(self):
         """Negative IG produces negative signed cell map."""
@@ -140,7 +147,7 @@ class TestProjectWindIgAlongTrack:
             levels_bottom_hpa=925.0,
             levels_top_hpa=300.0,
         )
-        np.testing.assert_allclose(result, np.full((2, 3), -4.0))
+        np.testing.assert_allclose(result, np.full((2, 3), -1.0))
 
     def test_no_level_dim_sums_only_spatial(self):
         """Variables without level dim are summed spatially only."""
@@ -161,3 +168,70 @@ class TestProjectWindIgAlongTrack:
         )
         # No level filtering needed; u=1, d̂_u=1 → 1.0 per cell
         np.testing.assert_allclose(result, np.full((2, 3), 1.0))
+
+
+def test_wind_ig_projection_uses_time_idx_not_sum():
+    """Projection must select time=1 (DLMSF convention), not sum over all time slices."""
+    import xarray
+
+    W = 5
+    nlev = 3
+    ig_u = np.zeros((2, nlev, W, W), dtype=np.float64)
+    ig_u[0] = 10.0
+    ig_u[1] = -10.0
+    ig_v = np.zeros_like(ig_u)
+
+    lat = np.linspace(20, 24, W)
+    lon = np.linspace(120, 124, W)
+    coords = {"time": [0, 1], "level": [925.0, 600.0, 300.0], "lat": lat, "lon": lon}
+    u_da = xarray.DataArray(
+        np.zeros((2, nlev, W, W), dtype=np.float32),
+        dims=("time", "level", "lat", "lon"),
+        coords=coords,
+    )
+    v_da = u_da.copy()
+    window = _make_window(W, lat_vals=lat, lon_vals=lon)
+    result = _project_wind_ig_along_track(
+        ig_u_full=ig_u,
+        ig_v_full=ig_v,
+        u_da=u_da,
+        v_da=v_da,
+        window=window,
+        d_hat=(1.0, 0.0),
+        time_idx=1,
+    )
+    assert result.mean() < -1.0, "Should use time=1 (negative), not sum over time"
+
+
+def test_wind_ig_projection_uses_pressure_weights():
+    """Projection must apply trapezoid pressure weights matching DLMSF."""
+    import xarray
+
+    W = 5
+    ig_u = np.zeros((1, 3, W, W), dtype=np.float64)
+    ig_u[0, 0] = 1.0
+    ig_v = np.zeros_like(ig_u)
+
+    lat = np.linspace(20, 24, W)
+    lon = np.linspace(120, 124, W)
+    coords = {"time": [1], "level": [925.0, 600.0, 300.0], "lat": lat, "lon": lon}
+    u_da = xarray.DataArray(
+        np.zeros((1, 3, W, W), dtype=np.float32),
+        dims=("time", "level", "lat", "lon"),
+        coords=coords,
+    )
+    v_da = u_da.copy()
+    window = _make_window(W, lat_vals=lat, lon_vals=lon)
+    result = _project_wind_ig_along_track(
+        ig_u_full=ig_u,
+        ig_v_full=ig_v,
+        u_da=u_da,
+        v_da=v_da,
+        window=window,
+        d_hat=(1.0, 0.0),
+        time_idx=0,
+    )
+    expected = 162.5 / 625.0
+    assert abs(result.mean() - expected) < 1e-4, (
+        f"Expected pressure-weighted mean ≈ {expected:.4f}, got {result.mean():.4f}"
+    )
