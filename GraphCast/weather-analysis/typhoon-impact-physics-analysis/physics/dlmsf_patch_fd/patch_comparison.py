@@ -11,7 +11,7 @@ import numpy as np
 import scipy.stats
 import xarray
 
-from physics.dlmsf_patch_fd.dlmsf_sensitivity import DLMSFSensitivityResult, _extract_uv_levels, _haversine_km, compute_dlmsf_patch_fd
+from physics.dlmsf_patch_fd.dlmsf_sensitivity import DLMSFSensitivityResult, _extract_uv_levels, _haversine_km, compute_dlmsf_925_300, compute_dlmsf_patch_fd
 from physics.dlmsf_patch_fd.ig_phys import compute_ig_phys_dlmsf_along
 from shared.analysis_pipeline import AnalysisConfig, AnalysisContext, resolve_spatial_variables
 from shared.importance_common import collapse_input_attribution_to_latlon
@@ -1207,8 +1207,9 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     # E1: ig_phys_vs_dlmsf_fd fields
-    for key in ("j_along_analytical", "j_phys_baseline", "pearson_r", "spearman_rho",
-                "iou_topq", "topq_fraction"):
+    for key in ("j_along_analytical", "j_along_fd_full", "j_along_fd_base",
+                "j_along_fd_anomaly", "j_phys_baseline",
+                "pearson_r", "spearman_rho", "iou_topq", "topq_fraction"):
         if key in case:
             summary[key] = case[key]
 
@@ -1554,6 +1555,24 @@ def run_track_patch_analysis(
             u_base, v_base, _ = _extract_uv_levels(
                 baseline_inputs, window.lat_vals, window.lon_vals
             )
+            axis_u_e1 = float(track_ref.along_hat[0])
+            axis_v_e1 = float(track_ref.along_hat[1])
+            U_base_e1, V_base_e1 = compute_dlmsf_925_300(
+                u_base.astype(np.float32),
+                v_base.astype(np.float32),
+                levels_eval.astype(np.float32),
+                window.lat_vals,
+                window.lon_vals,
+                float(track_ref.init_lat),
+                float(track_ref.init_lon),
+                core_radius_deg=core_radius_deg_e1,
+                annulus_inner_km=annulus_inner_km_e1,
+                annulus_outer_km=annulus_outer_km_e1,
+                levels_bottom_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_BOTTOM_HPA", 925.0)),
+                levels_top_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_TOP_HPA", 300.0)),
+            )
+            j_base_e1 = float(U_base_e1) * axis_u_e1 + float(V_base_e1) * axis_v_e1
+            j_fd_anomaly = float(dlmsf_result.J_phys_baseline) - j_base_e1
             u_anom = (u_eval - u_base).astype(np.float64)
             v_anom = (v_eval - v_base).astype(np.float64)
             env_mask_e1 = _compute_dlmsf_env_mask(
@@ -1591,6 +1610,7 @@ def run_track_patch_analysis(
             )
             ig_phys_scores = ig_phys_patch["signed_scores"]
             dlmsf_fd_scores = dlmsf_result.patch_parallel_scores
+            j_along_analytical_e1 = float(np.asarray(ig_phys_result["j_along"], dtype=np.float64))
             _pearson_e1, _ = _safe_corr(scipy.stats.pearsonr, ig_phys_scores, dlmsf_fd_scores)
             _spearman_e1, _ = _safe_corr(scipy.stats.spearmanr, ig_phys_scores, dlmsf_fd_scores)
             iou_e1, _, _, _ = _topq_iou(
@@ -1607,7 +1627,10 @@ def run_track_patch_analysis(
                 "ig_phys_cell_map": ig_phys_cell_map,
                 "ig_phys_patch_scores": ig_phys_scores,
                 "dlmsf_fd_scores": dlmsf_fd_scores,
-                "j_along_analytical": float(ig_phys_result["j_along"]),
+                "j_along_analytical": j_along_analytical_e1,
+                "j_along_fd_full": float(dlmsf_result.J_phys_baseline),
+                "j_along_fd_base": float(j_base_e1),
+                "j_along_fd_anomaly": float(j_fd_anomaly),
                 "j_phys_baseline": float(dlmsf_result.J_phys_baseline),
                 "pearson_r": float(_pearson_e1),
                 "spearman_rho": float(_spearman_e1),
@@ -1618,7 +1641,9 @@ def run_track_patch_analysis(
                 f"[Track-Patch] {e1_case_key}: "
                 f"pearson={_pearson_e1:+.3f}  spearman={_spearman_e1:+.3f}  "
                 f"iou@{int(round(100.0 * topk_fraction))}%={iou_e1:.3f}  "
-                f"j_analytical={ig_phys_result['j_along']:.4f}  j_fd={dlmsf_result.J_phys_baseline:.4f}"
+                f"j_analytical={j_along_analytical_e1:.4f}  "
+                f"j_fd_anomaly={j_fd_anomaly:.4f}  "
+                f"j_fd_full={dlmsf_result.J_phys_baseline:.4f}"
             )
         except Exception as _e1_exc:
             print(f"[Track-Patch] E1 skipped: {_e1_exc}")

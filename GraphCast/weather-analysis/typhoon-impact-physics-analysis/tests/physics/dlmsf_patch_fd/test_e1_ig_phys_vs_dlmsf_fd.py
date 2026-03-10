@@ -98,3 +98,37 @@ class TestComputeDlmsfEnvMask:
             annulus_outer_km=1000.0,
         )
         assert not mask.any()  # center is at 0 km, inside core_km=222 km
+
+
+def test_j_along_fd_anomaly_differs_from_j_full():
+    """j_along_fd_anomaly = J_full - J_base must be computable and differ from J_full."""
+    from physics.dlmsf_patch_fd.dlmsf_sensitivity import compute_dlmsf_925_300
+
+    W = 7
+    levels = np.array([925.0, 600.0, 300.0])
+    lat = np.linspace(18.0, 26.0, W)
+    lon = np.linspace(118.0, 126.0, W)
+    center_lat, center_lon = 22.0, 122.0
+
+    rng = np.random.default_rng(7)
+    u_eval = rng.standard_normal((3, W, W)).astype(np.float32) * 5 + 3.0
+    v_eval = rng.standard_normal((3, W, W)).astype(np.float32) * 3
+    u_base = rng.standard_normal((3, W, W)).astype(np.float32) * 2 + 1.0
+    v_base = rng.standard_normal((3, W, W)).astype(np.float32) * 1.5
+
+    U_full, V_full = compute_dlmsf_925_300(
+        u_eval, v_eval, levels, lat, lon, center_lat, center_lon,
+        core_radius_deg=2.0, annulus_inner_km=200.0, annulus_outer_km=800.0,
+    )
+    U_base, V_base = compute_dlmsf_925_300(
+        u_base, v_base, levels, lat, lon, center_lat, center_lon,
+        core_radius_deg=2.0, annulus_inner_km=200.0, annulus_outer_km=800.0,
+    )
+    j_full = float(U_full) * 1.0 + float(V_full) * 0.0
+    j_base = float(U_base) * 1.0 + float(V_base) * 0.0
+    j_anomaly = j_full - j_base
+
+    assert abs(j_base) > 0.01, "Baseline J should be non-zero"
+    assert abs(j_anomaly - j_full) > 0.01, "Anomaly should differ from full J"
+    assert np.isfinite(j_anomaly)
+    assert np.isfinite(j_full)
