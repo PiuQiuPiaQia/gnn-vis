@@ -165,6 +165,20 @@ class TestComputeSignClassGrid:
         grid = compute_sign_class_grid(wind, dlmsf, patches, shape, k=3)
         assert np.all(grid == 1), f"Expected all class 1, got {grid}"
 
+    def test_partial_overlap_different_classes_per_cell(self):
+        """Partial overlaps: each cell's winner is determined by its own vote count."""
+        shape = (1, 4)
+        m0 = np.array([[True, True, False, False]])
+        m1 = np.array([[False, False, True, True]])
+        patches = [_FakePatch(m0), _FakePatch(m1)]
+        wind = np.array([1.0, -1.0])
+        dlmsf = np.array([1.0, -1.0])
+        grid = compute_sign_class_grid(wind, dlmsf, patches, shape, k=2)
+        assert grid[0, 0] == 1, f"cell 0: expected class 1, got {grid[0,0]}"
+        assert grid[0, 1] == 1, f"cell 1: expected class 1, got {grid[0,1]}"
+        assert grid[0, 2] == 2, f"cell 2: expected class 2, got {grid[0,2]}"
+        assert grid[0, 3] == 2, f"cell 3: expected class 2, got {grid[0,3]}"
+
     def test_overlap_mask_from_sign_class_map(self):
         """overlap_mask = (sign_class_map > 0) captures all union cells."""
         wind = np.array([2.0, -1.0])

@@ -918,9 +918,10 @@ def compute_sign_class_grid(
     wind = np.asarray(wind_signed_scores, dtype=np.float64).ravel()
     dlmsf = np.asarray(dlmsf_signed_scores, dtype=np.float64).ravel()
     n = len(wind)
-    assert len(dlmsf) == n and len(patches) == n, (
-        f"wind({n}), dlmsf({len(dlmsf)}), patches({len(patches)}) must have same length"
-    )
+    if len(dlmsf) != n or len(patches) != n:
+        raise ValueError(
+            f"wind ({n}), dlmsf ({len(dlmsf)}), patches ({len(patches)}) must have same length"
+        )
 
     def _topk_set(scores: np.ndarray) -> set:
         finite = np.flatnonzero(np.isfinite(scores))
@@ -947,6 +948,10 @@ def compute_sign_class_grid(
         mask = np.asarray(patches[int(patch_idx)].mask, dtype=bool)
         counts[cls][mask] += 1
 
+    # Tie-breaking: argmax returns lowest index on tie.
+    # For cells with equal votes, class priority is: 0 < 1 < 2 < 3.
+    # Class 0 = outside union is never in a tie (has 0 count for union cells).
+    # So ties among union cells (1 vs 2 vs 3) are resolved toward "++ agree".
     grid = np.argmax(counts, axis=0).astype(np.int32)
     return grid
 
