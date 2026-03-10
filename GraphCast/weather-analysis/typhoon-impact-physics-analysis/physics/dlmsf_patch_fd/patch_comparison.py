@@ -880,6 +880,77 @@ def classify_patch_roles(
     return roles
 
 
+def compute_sign_class_grid(
+    wind_signed_scores: np.ndarray,
+    dlmsf_signed_scores: np.ndarray,
+    patches: Sequence,
+    grid_shape: Tuple[int, int],
+    k: int,
+) -> np.ndarray:
+    """Rasterize per-patch sign-agreement classes to a 2-D cell grid.
+
+    Sign class encoding (matches plot_track_patch_sign_map):
+        0 = not in top-k union
+        1 = ++ agree (both positive)
+        2 = -- agree (both negative)
+        3 = opposite signs
+
+    Uses mode voting for overlapping patches (most frequent class wins).
+    Patches NOT in the top-k union of |wind| or |dlmsf| are ignored (class 0).
+
+    Parameters
+    ----------
+    wind_signed_scores, dlmsf_signed_scores:
+        1-D signed scores for each patch.
+    patches:
+        List of patch objects with a `.mask` attribute (2-D bool array, same
+        spatial shape as `grid_shape`).
+    grid_shape:
+        (n_rows, n_cols) spatial shape.
+    k:
+        Top-k threshold. Patches in top-k of |wind| OR top-k of |dlmsf|
+        are included in the union.
+
+    Returns
+    -------
+    np.ndarray of dtype int32, shape ``grid_shape``.
+    """
+    wind = np.asarray(wind_signed_scores, dtype=np.float64).ravel()
+    dlmsf = np.asarray(dlmsf_signed_scores, dtype=np.float64).ravel()
+    n = len(wind)
+    assert len(dlmsf) == n and len(patches) == n, (
+        f"wind({n}), dlmsf({len(dlmsf)}), patches({len(patches)}) must have same length"
+    )
+
+    def _topk_set(scores: np.ndarray) -> set:
+        finite = np.flatnonzero(np.isfinite(scores))
+        actual_k = min(k, len(finite))
+        if actual_k == 0:
+            return set()
+        order = np.argsort(np.abs(scores[finite]))[::-1]
+        return set(finite[order[:actual_k]].tolist())
+
+    union_set = _topk_set(wind) | _topk_set(dlmsf)
+
+    def _sign_class(w: float, d: float) -> int:
+        if not (np.isfinite(w) and np.isfinite(d)):
+            return 3
+        if w > 0 and d > 0:
+            return 1
+        if w < 0 and d < 0:
+            return 2
+        return 3
+
+    counts = np.zeros((4,) + tuple(grid_shape), dtype=np.int32)
+    for patch_idx in union_set:
+        cls = _sign_class(float(wind[patch_idx]), float(dlmsf[patch_idx]))
+        mask = np.asarray(patches[int(patch_idx)].mask, dtype=bool)
+        counts[cls][mask] += 1
+
+    grid = np.argmax(counts, axis=0).astype(np.int32)
+    return grid
+
+
 def _filter_uv_to_band(
     u_anom: np.ndarray,
     v_anom: np.ndarray,
@@ -1594,16 +1665,12 @@ def run_track_patch_analysis(
             np.asarray(wind_patch["signed_scores"], dtype=np.float64),
             np.asarray(dlmsf_signed, dtype=np.float64),
         )
-        wind_sign_class_scores = classify_patch_roles(
-            np.asarray(wind_patch["abs_scores"], dtype=np.float64),
-            np.abs(np.asarray(dlmsf_signed, dtype=np.float64)),
+        wind_sign_class_map = compute_sign_class_grid(
+            wind_signed_scores=np.asarray(wind_patch["signed_scores"], dtype=np.float64),
+            dlmsf_signed_scores=np.asarray(dlmsf_signed, dtype=np.float64),
+            patches=wind_patch["patches"],
+            grid_shape=window.shape,
             k=k20,
-        )
-        wind_sign_class_map = patch_scores_to_grid(
-            wind_sign_class_scores,
-            wind_patch["patches"],
-            window.shape,
-            core_mask=window.core_mask,
         )
         cases[wind_along_key] = {
             "direction": direction,
@@ -1640,7 +1707,7 @@ def run_track_patch_analysis(
                     "lat_vals": window.lat_vals.tolist(),
                     "lon_vals": window.lon_vals.tolist(),
                     "sign_class_map": wind_sign_class_map.tolist(),
-                    "overlap_mask": (wind_sign_class_map == 3).tolist(),
+                    "overlap_mask": (wind_sign_class_map > 0).tolist(),
                     "sign_agreement_at_20": float(wind_sign_agreement_20) if wind_sign_agreement_20 == wind_sign_agreement_20 else None,
                 },
                 "scatter": {

@@ -10,6 +10,7 @@ from physics.dlmsf_patch_fd.patch_comparison import (
     _compute_single_deletion_curve,
     _compute_alignment_metrics,
     _patch_scores_from_maps,
+    compute_sign_class_grid,
     compute_topk_iou_signed,
     compute_sign_agreement,
 )
@@ -103,6 +104,89 @@ def test_compute_single_deletion_curve_produces_correct_deltas(monkeypatch):
     assert len(curve["deltas"]) == 3
     # base_scalar=1.0, new_scalar=0.5 → delta=0.5 at every step
     assert all(abs(d - 0.5) < 1e-9 for d in curve["deltas"])
+
+
+class _FakePatch:
+    """Minimal patch object with .mask attribute."""
+
+    def __init__(self, mask: np.ndarray):
+        self.mask = mask
+
+
+def _single_cell_patches(n: int, shape=(4, 4)):
+    """n non-overlapping single-cell patches (row-major order)."""
+    patches = []
+    for i in range(n):
+        m = np.zeros(shape, dtype=bool)
+        row, col = divmod(i, shape[1])
+        if row < shape[0]:
+            m[row, col] = True
+        patches.append(_FakePatch(m))
+    return patches
+
+
+class TestComputeSignClassGrid:
+    def test_both_positive_gives_class_1(self):
+        wind = np.array([2.0])
+        dlmsf = np.array([3.0])
+        patches = _single_cell_patches(1)
+        grid = compute_sign_class_grid(wind, dlmsf, patches, (4, 4), k=1)
+        assert grid[0, 0] == 1, f"Expected class 1 (++agree), got {grid[0,0]}"
+
+    def test_both_negative_gives_class_2(self):
+        wind = np.array([-2.0])
+        dlmsf = np.array([-3.0])
+        patches = _single_cell_patches(1)
+        grid = compute_sign_class_grid(wind, dlmsf, patches, (4, 4), k=1)
+        assert grid[0, 0] == 2, f"Expected class 2 (--agree), got {grid[0,0]}"
+
+    def test_opposite_signs_gives_class_3(self):
+        wind = np.array([2.0])
+        dlmsf = np.array([-3.0])
+        patches = _single_cell_patches(1)
+        grid = compute_sign_class_grid(wind, dlmsf, patches, (4, 4), k=1)
+        assert grid[0, 0] == 3, f"Expected class 3 (opposite), got {grid[0,0]}"
+
+    def test_outside_topk_gives_class_0(self):
+        wind = np.array([2.0, 1.0])
+        dlmsf = np.array([3.0, 0.5])
+        patches = _single_cell_patches(2)
+        grid = compute_sign_class_grid(wind, dlmsf, patches, (4, 4), k=1)
+        assert grid[0, 0] == 1, "patch 0 in union, both positive → class 1"
+        assert grid[0, 1] == 0, "patch 1 NOT in union → class 0"
+
+    def test_mode_voting_overlapping_patches(self):
+        """Mode voting: most common class wins for overlapping patches."""
+        shape = (2, 2)
+        m = np.ones(shape, dtype=bool)
+        patches = [_FakePatch(m), _FakePatch(m), _FakePatch(m)]
+        wind = np.array([1.0, 1.0, -1.0])
+        dlmsf = np.array([1.0, 1.0, -1.0])
+        grid = compute_sign_class_grid(wind, dlmsf, patches, shape, k=3)
+        assert np.all(grid == 1), f"Expected all class 1, got {grid}"
+
+    def test_overlap_mask_from_sign_class_map(self):
+        """overlap_mask = (sign_class_map > 0) captures all union cells."""
+        wind = np.array([2.0, -1.0])
+        dlmsf = np.array([3.0, -0.5])
+        patches = _single_cell_patches(2)
+        grid = compute_sign_class_grid(wind, dlmsf, patches, (4, 4), k=2)
+        assert grid[0, 0] > 0, "patch 0 in union → class > 0"
+        assert grid[0, 1] > 0, "patch 1 in union → class > 0"
+
+    def test_nan_score_treated_as_opposite(self):
+        wind = np.array([float("nan")])
+        dlmsf = np.array([3.0])
+        patches = _single_cell_patches(1)
+        grid = compute_sign_class_grid(wind, dlmsf, patches, (4, 4), k=1)
+        assert grid[0, 0] == 3
+
+    def test_all_outside_topk_returns_zero_grid(self):
+        wind = np.array([1.0, 0.5])
+        dlmsf = np.array([1.0, 0.5])
+        patches = _single_cell_patches(2)
+        grid = compute_sign_class_grid(wind, dlmsf, patches, (4, 4), k=0)
+        assert np.all(grid == 0)
 
 
 # ---------------------------------------------------------------------------
