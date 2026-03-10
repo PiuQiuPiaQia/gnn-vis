@@ -198,6 +198,128 @@ def _build_case_plot_payload(
     }
 
 
+def _classify_patch_sign(ig_score: float, dlmsf_score: float) -> int:
+    """Classify a pair of signed patch scores for sign agreement.
+
+    Returns:
+        1  same-sign positive (both > 0)
+        2  same-sign negative (both < 0)
+        3  opposite-sign or non-finite
+    """
+    if not np.isfinite(ig_score) or not np.isfinite(dlmsf_score):
+        return 3
+    if ig_score > 0.0 and dlmsf_score > 0.0:
+        return 1
+    if ig_score < 0.0 and dlmsf_score < 0.0:
+        return 2
+    return 3
+
+
+def _build_case_visualization_payload(
+    *,
+    window: CenteredWindow,
+    patches,
+    direction: str,
+    patch_size: int,
+    target_time_idx: int,
+    topq_fraction: float,
+    ig_abs_map: np.ndarray,
+    ig_abs_scores: np.ndarray,
+    ig_signed_scores: np.ndarray,
+    dlmsf_abs_map: np.ndarray,
+    dlmsf_abs_scores: np.ndarray,
+    dlmsf_signed_scores: np.ndarray,
+) -> Dict[str, Any]:
+    """Build the four-figure visualization payload for a single track-patch case.
+
+    All patch-level score arrays must have length == len(patches).
+
+    Payload sections:
+        meta        - metadata used for output filenames
+        overlap     - |IG|/|DLMSF| heat maps, Top-q overlap mask, Spearman rho, IoU@q
+        scatter     - patch-level abs score arrays (x=DLMSF, y=IG) + Spearman rho
+        sign_map    - discrete sign-class grid (0 non-overlap, 1 same+, 2 same-, 3 opp)
+        deletion    - None by default; wired in by run_track_patch_analysis
+    """
+    ig_abs = np.asarray(ig_abs_scores, dtype=np.float64)
+    ig_signed = np.asarray(ig_signed_scores, dtype=np.float64)
+    dlmsf_abs = np.asarray(dlmsf_abs_scores, dtype=np.float64)
+    dlmsf_signed = np.asarray(dlmsf_signed_scores, dtype=np.float64)
+
+    # Compute metrics from patch-level arrays
+    iou_at_20, actual_k, ig_top_idx, dlmsf_top_idx = _topq_iou(ig_abs, dlmsf_abs, topq_fraction)
+    spearman_rho, _ = _safe_corr(scipy.stats.spearmanr, ig_abs, dlmsf_abs)
+
+    # Compute Top-q overlap patch indices (intersection)
+    overlap_patch_idx = sorted(set(ig_top_idx.tolist()) & set(dlmsf_top_idx.tolist()))
+
+    # Build overlap cell mask
+    overlap_mask = np.zeros(window.shape, dtype=bool)
+    for i in overlap_patch_idx:
+        overlap_mask |= np.asarray(patches[i].mask, dtype=bool)
+
+    # Build sign_class_map: 0=non-overlap, 1=same+, 2=same-, 3=opposite
+    # Each cell is assigned the class of the overlap patch with the highest
+    # combined strength (|ig| + |dlmsf|) covering that cell.
+    sign_class_map = np.zeros(window.shape, dtype=np.int64)
+    cell_strength = np.full(window.shape, -np.inf, dtype=np.float64)
+
+    same_sign_count = 0
+    for patch_idx in overlap_patch_idx:
+        sign_class = _classify_patch_sign(
+            float(ig_signed[patch_idx]),
+            float(dlmsf_signed[patch_idx]),
+        )
+        if sign_class in (1, 2):
+            same_sign_count += 1
+        strength = float(ig_abs[patch_idx]) + float(dlmsf_abs[patch_idx])
+        mask = np.asarray(patches[patch_idx].mask, dtype=bool)
+        update = mask & (strength > cell_strength)
+        sign_class_map[update] = sign_class
+        cell_strength[update] = strength
+
+    overlap_patch_count = len(overlap_patch_idx)
+    sign_agreement_at_20 = (
+        float(same_sign_count) / float(overlap_patch_count)
+        if overlap_patch_count > 0
+        else float("nan")
+    )
+
+    lat_vals_list = np.asarray(window.lat_vals, dtype=np.float64).tolist()
+    lon_vals_list = np.asarray(window.lon_vals, dtype=np.float64).tolist()
+
+    return {
+        "meta": {
+            "direction": str(direction),
+            "patch_size": int(patch_size),
+            "target_time_idx": int(target_time_idx),
+            "topq_fraction": float(topq_fraction),
+        },
+        "overlap": {
+            "lat_vals": lat_vals_list,
+            "lon_vals": lon_vals_list,
+            "ig_abs_map": np.asarray(ig_abs_map, dtype=np.float64).tolist(),
+            "dlmsf_abs_map": np.asarray(dlmsf_abs_map, dtype=np.float64).tolist(),
+            "overlap_mask": overlap_mask.tolist(),
+            "spearman_rho": float(spearman_rho),
+            "iou_at_20": float(iou_at_20),
+        },
+        "scatter": {
+            "x_patch_abs_scores": dlmsf_abs.tolist(),
+            "y_patch_abs_scores": ig_abs.tolist(),
+            "spearman_rho": float(spearman_rho),
+        },
+        "sign_map": {
+            "lat_vals": lat_vals_list,
+            "lon_vals": lon_vals_list,
+            "sign_class_map": sign_class_map.tolist(),
+            "sign_agreement_at_20": sign_agreement_at_20,
+            "overlap_mask": overlap_mask.tolist(),
+        },
+        "deletion": None,
+    }
+
+
 def _run_forward_track_scalar(
     context: AnalysisContext,
     runtime_cfg: AnalysisConfig,
@@ -572,6 +694,20 @@ def _run_deletion_validation(
 
 
 def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
+    visualization = dict(case["visualization"])
+    # Wire deletion display fields into visualization["deletion"]
+    if case.get("deletion") is not None:
+        d = case["deletion"]
+        visualization["deletion"] = {
+            "masked_fraction": list(d.masked_fraction),
+            "high_ig_delta": list(d.high_ig_delta),
+            "random_mean_delta": list(d.random_mean_delta),
+            "low_ig_delta": list(d.low_ig_delta),
+            "aopc_high": float(d.high_ig_aopc),
+            "aopc_random": float(d.random_mean_aopc),
+            "aopc_low": float(d.low_ig_aopc),
+        }
+
     summary = {
         "direction": case["direction"],
         "patch_size": int(case["patch_size"]),
@@ -586,6 +722,7 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
         "metrics": asdict(case["metrics"]),
         "track_diagnostics": dict(case["track_diagnostics"]),
         "plot": dict(case["plot"]),
+        "visualization": visualization,
     }
     if case.get("deletion") is not None:
         summary["deletion"] = asdict(case["deletion"])
@@ -740,6 +877,20 @@ def run_track_patch_analysis(
             dlmsf_abs_map=dlmsf_result.S_abs_map,
             dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
             topq_fraction=topk_fraction,
+        ),
+        "visualization": _build_case_visualization_payload(
+            window=window,
+            patches=ig_patch["patches"],
+            direction=direction,
+            patch_size=main_patch_size,
+            target_time_idx=runtime_cfg.target_time_idx,
+            topq_fraction=topk_fraction,
+            ig_abs_map=ig_patch["abs_map"],
+            ig_abs_scores=ig_patch["abs_scores"],
+            ig_signed_scores=ig_patch["signed_scores"],
+            dlmsf_abs_map=dlmsf_result.S_abs_map,
+            dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
+            dlmsf_signed_scores=dlmsf_result.patch_parallel_scores,
         ),
         "ig": {
             **ig_maps,
