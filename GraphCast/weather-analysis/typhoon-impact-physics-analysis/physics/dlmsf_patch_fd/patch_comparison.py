@@ -1558,8 +1558,9 @@ def run_track_patch_analysis(
             np.asarray(dlmsf_signed, dtype=np.float64),
         )
         wind_sign_class_scores = classify_patch_roles(
-            np.asarray(wind_patch["signed_scores"], dtype=np.float64),
-            np.asarray(dlmsf_signed, dtype=np.float64),
+            np.asarray(wind_patch["abs_scores"], dtype=np.float64),
+            np.abs(np.asarray(dlmsf_signed, dtype=np.float64)),
+            k=k20,
         )
         wind_sign_class_map = patch_scores_to_grid(
             wind_sign_class_scores,
