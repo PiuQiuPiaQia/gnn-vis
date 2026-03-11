@@ -138,8 +138,13 @@ def compute_dlmsf_925_300(
     core_km = core_radius_deg * 111.0
     core_mask = dist_km < max(core_km, annulus_inner_km)
     env_mask = finite_mask & (~core_mask) & (dist_km <= annulus_outer_km)
-    if int(np.sum(env_mask)) < min_env_points:
-        env_mask = finite_mask
+    n_env = int(np.sum(env_mask))
+    if n_env < min_env_points:
+        raise ValueError(
+            f"Steering annulus has only {n_env} valid grid points "
+            f"(< min_env_points={min_env_points}). "
+            f"Cannot compute DLMSF. Check annulus_inner_km / annulus_outer_km configuration."
+        )
 
     U_sum = 0.0
     V_sum = 0.0

@@ -217,3 +217,35 @@ class TestDlmsfTimeIdxPropagation:
         assert result0.J_phys_baseline != result1.J_phys_baseline, (
             "J_phys_baseline 应随 target_time_idx 变化；若相同说明 time_idx 仍被写死"
         )
+
+
+class TestEnvMaskInsufficientRaisesError:
+    """annulus 点数不足时必须 raise ValueError，不能静默退化。"""
+
+    def test_raises_when_annulus_outer_km_too_small(self):
+        """把 annulus_outer_km 设为极小值，使得 env_mask 没有足够点。"""
+        import pytest
+        from physics.dlmsf_patch_fd.dlmsf_sensitivity import compute_dlmsf_925_300
+
+        lev = np.asarray([925, 500, 300], dtype=np.float32)
+        lat = np.linspace(-5, 5, 11)
+        lon = np.linspace(115, 125, 11)
+
+        # 3D numpy arrays: shape (n_levels, nlat, nlon)
+        u_levels = np.ones((3, 11, 11), dtype=np.float32)
+        v_levels = np.zeros((3, 11, 11), dtype=np.float32)
+
+        with pytest.raises(ValueError, match="Steering annulus"):
+            compute_dlmsf_925_300(
+                u_levels=u_levels,
+                v_levels=v_levels,
+                levels_hpa=lev,
+                lat_vals=lat,
+                lon_vals=lon,
+                center_lat=0.0,
+                center_lon=120.0,
+                core_radius_deg=0.0,
+                annulus_inner_km=0.0,
+                annulus_outer_km=1.0,   # 极小值：几乎没有 annulus 点
+                min_env_points=10,
+            )
