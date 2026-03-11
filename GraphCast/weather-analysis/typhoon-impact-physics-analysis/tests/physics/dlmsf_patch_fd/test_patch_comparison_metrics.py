@@ -144,8 +144,8 @@ def test_patch_scores_with_annulus_mask_restricts_scoring_to_annulus():
             assert result["abs_scores"][i] == 0.0, f"patch {i} has no annulus overlap, expected 0"
 
 
-def test_patch_scores_normalized_by_annulus_cell_count():
-    """When all cells are in annulus and cell_map=1.0, normalized score = 1.0 for all patches."""
+def test_patch_scores_with_full_annulus_uses_restricted_sum():
+    """With full annulus mask and all-1 cell map, score = number of annulus cells in patch."""
     lat = np.linspace(-5, 5, 11)
     lon = np.linspace(115, 125, 11)
     window = build_centered_window(lat, lon, center_lat=0.0, center_lon=120.0,
@@ -158,8 +158,12 @@ def test_patch_scores_normalized_by_annulus_cell_count():
         signed_cell_map=ones, abs_cell_map=ones,
         annulus_mask=full_annulus,
     )
-    np.testing.assert_allclose(result["abs_scores"], 1.0, rtol=1e-6,
-                                err_msg="All-1 map with full annulus should give normalized score=1.0")
+    # With all-1 cell map and full annulus: score = sum of 1.0 per annulus cell = n_cells
+    for i, patch in enumerate(result["patches"]):
+        expected = float(np.sum(np.asarray(patch.mask, dtype=bool) & full_annulus))
+        assert result["abs_scores"][i] == pytest.approx(expected), (
+            f"patch {i}: expected sum={expected}, got {result['abs_scores'][i]}"
+        )
 
 
 def test_no_overlap_patch_scores_zero_with_annulus_mask():

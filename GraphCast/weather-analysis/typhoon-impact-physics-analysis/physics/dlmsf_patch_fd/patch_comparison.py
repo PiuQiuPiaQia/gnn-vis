@@ -121,14 +121,18 @@ def _patch_scores_from_maps(
 
     if annulus_mask is not None:
         ann = np.asarray(annulus_mask, dtype=bool)
+        if ann.shape != tuple(window.shape):
+            raise ValueError(
+                f"annulus_mask shape {ann.shape} does not match window shape {tuple(window.shape)}"
+            )
         signed_scores = np.zeros(len(patches), dtype=np.float64)
         abs_scores = np.zeros(len(patches), dtype=np.float64)
         for i, patch in enumerate(patches):
             effective = np.asarray(patch.mask, dtype=bool) & ann
             n = int(np.sum(effective))
             if n > 0:
-                abs_scores[i] = float(np.sum(abs_cell[effective])) / n
-                signed_scores[i] = float(np.sum(signed_cell[effective])) / n
+                abs_scores[i] = float(np.sum(abs_cell[effective]))
+                signed_scores[i] = float(np.sum(signed_cell[effective]))
             # else: 0.0 (default)
     else:
         signed_scores = np.array(
