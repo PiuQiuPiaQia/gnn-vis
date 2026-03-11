@@ -747,26 +747,31 @@ def _compute_alignment_metrics(
 
 def _compute_physical_aopc(
     *,
-    dlmsf_signed_scores: np.ndarray,
-    ig_abs_scores: np.ndarray,
+    ig_phys_cell_map: np.ndarray,
+    ig_abs_patch_scores: np.ndarray,
+    dlmsf_signed_patch_scores: np.ndarray,
+    patches: Sequence,
     seed: int = 42,
     random_repeats: int = 8,
 ) -> Dict[str, Any]:
-    """Compute AOPC curves on the physical scalar J_along analytically (E4).
+    """Compute AOPC curves on the physical scalar J_along without double-counting.
 
-    Uses the pre-computed DLMSF per-patch ΔJ values to build cumulative-delta
-    curves for three deletion orderings — DLMSF-topK, IG-topK, and random —
-    without any new forward passes.
-
-    The cumulative delta at step k is the running sum of
-    ``dlmsf_signed_scores`` in the chosen patch order.
+    Uses the analytical IG cell map to build cumulative-delta curves. At each
+    step, the delta equals the sum of ig_phys_cell_map over the union of all
+    patch masks added so far. Because J_along is linear, this is exact with no
+    double-counting from overlapping patches.
 
     Parameters
     ----------
-    dlmsf_signed_scores:
-        1-D array of per-patch ΔJ values (signed along-track DLMSF scores).
-    ig_abs_scores:
-        1-D array of per-patch absolute IG scores (used for IG-topK ordering).
+    ig_phys_cell_map:
+        2-D array (nlat, nlon) of per-cell contribution to J_along.
+        Computed from compute_ig_phys_dlmsf_along: ig_u_latlon + ig_v_latlon.
+    ig_abs_patch_scores:
+        1-D array of absolute per-patch IG scores (for IG-topK ordering).
+    dlmsf_signed_patch_scores:
+        1-D array of signed per-patch DLMSF scores (for DLMSF-topK ordering by |score|).
+    patches:
+        List of patch objects with a `.mask` attribute (2-D bool array, shape == ig_phys_cell_map.shape).
     seed:
         RNG seed for random orderings.
     random_repeats:
@@ -783,41 +788,57 @@ def _compute_physical_aopc(
         ``"aopc_random_mean"``        — mean AOPC over random orderings.
         ``"n_patches"``               — number of patches.
     """
-    s = np.asarray(dlmsf_signed_scores, dtype=np.float64).ravel()
-    ig = np.asarray(ig_abs_scores, dtype=np.float64).ravel()
-    n = len(s)
+    cell_map = np.asarray(ig_phys_cell_map, dtype=np.float64)
+    ig = np.asarray(ig_abs_patch_scores, dtype=np.float64).ravel()
+    s = np.asarray(dlmsf_signed_patch_scores, dtype=np.float64).ravel()
+    n = len(ig)
+    if len(s) != n or len(patches) != n:
+        raise ValueError(
+            f"ig_abs ({n}), dlmsf ({len(s)}), patches ({len(patches)}) must have same length"
+        )
 
-    def _cumulative(order: np.ndarray) -> np.ndarray:
-        return np.cumsum(s[order])
+    def _cumulative_union(order: np.ndarray) -> List[float]:
+        union = np.zeros(cell_map.shape, dtype=bool)
+        deltas: List[float] = []
+        for patch_idx in order.tolist():
+            union |= np.asarray(patches[int(patch_idx)].mask, dtype=bool)
+            deltas.append(float(np.sum(cell_map[union])))
+        return deltas
 
     # DLMSF-topK: sort by |dlmsf_signed| descending
     dlmsf_order = np.argsort(np.abs(s), kind="stable")[::-1]
-    dlmsf_cumul = _cumulative(dlmsf_order).tolist()
+    dlmsf_cumul = _cumulative_union(dlmsf_order)
 
     # IG-topK: sort by ig_abs descending
     ig_order = np.argsort(ig, kind="stable")[::-1]
-    ig_cumul = _cumulative(ig_order).tolist()
+    ig_cumul = _cumulative_union(ig_order)
 
     # Random orderings
     rng = np.random.default_rng(int(seed))
-    random_cumuls: List[np.ndarray] = []
+    random_cumuls: List[List[float]] = []
     for _ in range(max(1, int(random_repeats))):
         rand_order = rng.permutation(n)
-        random_cumuls.append(_cumulative(rand_order))
+        random_cumuls.append(_cumulative_union(rand_order))
 
-    random_mean_cumul = (
-        np.mean(np.stack(random_cumuls, axis=0), axis=0) if random_cumuls else np.zeros(n)
-    )
+    if random_cumuls:
+        random_mean_cumul = np.mean(
+            np.stack([np.asarray(r, dtype=np.float64) for r in random_cumuls], axis=0),
+            axis=0,
+        ).tolist()
+    else:
+        random_mean_cumul = []
 
-    aopc = lambda cumul: float(np.mean(cumul)) if len(cumul) > 0 else 0.0
+    aopc_dlmsf = float(np.mean(dlmsf_cumul)) if dlmsf_cumul else 0.0
+    aopc_ig = float(np.mean(ig_cumul)) if ig_cumul else 0.0
+    aopc_random_mean = float(np.mean(random_mean_cumul)) if random_mean_cumul else 0.0
 
     return {
         "high_dlmsf_cumulative": dlmsf_cumul,
         "ig_cumulative": ig_cumul,
-        "random_mean_cumulative": random_mean_cumul.tolist(),
-        "aopc_dlmsf": aopc(dlmsf_cumul),
-        "aopc_ig": aopc(ig_cumul),
-        "aopc_random_mean": aopc(random_mean_cumul),
+        "random_mean_cumulative": random_mean_cumul,
+        "aopc_dlmsf": aopc_dlmsf,
+        "aopc_ig": aopc_ig,
+        "aopc_random_mean": aopc_random_mean,
         "n_patches": n,
     }
 
@@ -1363,6 +1384,15 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
     return summary
 
 
+def _case_aopc_summary(aopc: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "aopc_dlmsf": float(aopc["aopc_dlmsf"]),
+        "aopc_ig": float(aopc["aopc_ig"]),
+        "aopc_random_mean": float(aopc["aopc_random_mean"]),
+        "n_patches": int(aopc["n_patches"]),
+    }
+
+
 def _slim_report_for_json(report: Dict[str, Any]) -> Dict[str, Any]:
     """Return a copy of *report* with large array payloads stripped out.
 
@@ -1514,14 +1544,6 @@ def run_track_patch_analysis(
             dlmsf_signed_scores=dlmsf_result.patch_parallel_scores,
         )
 
-    # E4: Physical AOPC (analytical, no forward passes needed)
-    physical_aopc = _compute_physical_aopc(
-        dlmsf_signed_scores=dlmsf_result.patch_parallel_scores,
-        ig_abs_scores=ig_patch["abs_scores"],
-        seed=deletion_seed,
-        random_repeats=random_repeats,
-    )
-
     cases[main_case_key] = {
         "direction": direction,
         "patch_size": main_patch_size,
@@ -1565,7 +1587,7 @@ def run_track_patch_analysis(
         "dlmsf_result": dlmsf_result,
         "metrics": metrics,
         "deletion": deletion,
-        "physical_aopc": physical_aopc,
+        "physical_aopc": None,
         "track_diagnostics": {
             **asdict(full_track_diagnostics),
             "reference_init_lat": track_ref.init_lat,
@@ -1797,6 +1819,16 @@ def run_track_patch_analysis(
                 abs_cell_map=ig_phys_abs_cell_map,
             )
             ig_phys_scores = ig_phys_patch["signed_scores"]
+            cases[main_case_key]["physical_aopc"] = _case_aopc_summary(
+                _compute_physical_aopc(
+                    ig_phys_cell_map=ig_phys_cell_map,
+                    ig_abs_patch_scores=ig_phys_patch["abs_scores"],
+                    dlmsf_signed_patch_scores=dlmsf_result.patch_parallel_scores,
+                    patches=ig_phys_patch["patches"],
+                    seed=deletion_seed,
+                    random_repeats=random_repeats,
+                )
+            )
             dlmsf_fd_scores = dlmsf_result.patch_parallel_scores
             j_along_analytical_e1 = float(np.asarray(ig_phys_result["j_along"], dtype=np.float64))
             _pearson_e1, _ = _safe_corr(scipy.stats.pearsonr, ig_phys_scores, dlmsf_fd_scores)
