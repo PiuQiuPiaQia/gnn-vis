@@ -165,3 +165,48 @@ def test_deletion_figure_annotation_does_not_contain_auc(tmp_path):
     assert "AUC" not in text
     assert "auc" not in text.lower()
     assert "0.57" in text  # AOPC values are present
+
+
+def test_scatter_xlabel_is_dlmsf(monkeypatch):
+    """x-axis (data = dlmsf_abs) label should contain 'DLMSF', y-axis should contain 'IG'."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from physics.dlmsf_patch_fd import plot_track_patch_report
+
+    captured_axes = []
+    original_subplots = plt.subplots
+
+    def mock_subplots(*args, **kwargs):
+        fig, ax = original_subplots(*args, **kwargs)
+        captured_axes.append(ax)
+        return fig, ax
+
+    monkeypatch.setattr(plot_track_patch_report.plt, "subplots", mock_subplots)
+
+    report = {
+        "main_case": "along_p3",
+        "cases": {
+            "along_p3": {
+                "visualization": {
+                    "meta": {"direction": "along"},
+                    "scatter": {
+                        "x_patch_abs_scores": [1.0, 2.0, 3.0],
+                        "y_patch_abs_scores": [1.5, 2.5, 0.5],
+                        "spearman_rho": 0.5,
+                    },
+                }
+            }
+        },
+    }
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "scatter.png")
+        plot_track_patch_report.plot_track_patch_scatter(report, out)
+
+    assert captured_axes, "subplots mock was not triggered"
+    ax = captured_axes[-1]
+    xlabel = ax.get_xlabel()
+    ylabel = ax.get_ylabel()
+    assert "DLMSF" in xlabel, f"x-axis label should contain 'DLMSF' (data is DLMSF), got: {xlabel!r}"
+    assert "IG" in ylabel, f"y-axis label should contain 'IG' (data is IG), got: {ylabel!r}"

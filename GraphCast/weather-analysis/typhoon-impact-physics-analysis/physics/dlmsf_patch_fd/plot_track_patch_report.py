@@ -241,8 +241,8 @@ def plot_track_patch_scatter(
 
     fig, ax = plt.subplots(figsize=(6, 5), dpi=dpi, constrained_layout=True)
     ax.scatter(x, y, alpha=0.7, s=40, color="#2980b9")
-    ax.set_xlabel("|IG| patch score")
-    ax.set_ylabel(f"|DLMSF_{direction}| patch score")
+    ax.set_xlabel(f"|DLMSF_{direction}| patch score")
+    ax.set_ylabel("|IG| patch score")
     ax.set_title("Patch-Level Rank Agreement")
     ax.grid(alpha=0.25)
 

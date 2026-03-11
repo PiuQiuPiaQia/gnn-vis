@@ -921,6 +921,11 @@ def _run_deletion_validation(
     random_repeats: int,
     dlmsf_signed_scores: "np.ndarray | None" = None,
 ) -> DeletionCurveSummary:
+    # NOTE: This deletion validation verifies that model spatial hotspots are
+    # predictively significant (masking them with baseline changes the forecast).
+    # It does NOT verify the physical steering mechanism.
+    # Correct label for paper: "spatial hotspot sensitivity test" or
+    # "model attribution significance test", NOT "physical mechanism verification".
     base_scalar, _ = _run_forward_track_scalar(
         context,
         runtime_cfg,
