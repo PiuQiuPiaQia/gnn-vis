@@ -11,7 +11,7 @@ from physics.dlmsf_patch_fd.patch_comparison import (
     _compute_alignment_metrics,
     _patch_scores_from_maps,
 )
-from shared.patch_geometry import CenteredWindow
+from shared.patch_geometry import CenteredWindow, build_centered_window
 
 
 def _window_no_core(shape: tuple[int, int]) -> CenteredWindow:
@@ -101,3 +101,84 @@ def test_compute_single_deletion_curve_produces_correct_deltas(monkeypatch):
     assert len(curve["deltas"]) == 3
     # base_scalar=1.0, new_scalar=0.5 → delta=0.5 at every step
     assert all(abs(d - 0.5) < 1e-9 for d in curve["deltas"])
+
+
+def test_patch_scores_from_maps_without_annulus_mask_uses_sum():
+    """Without annulus_mask, behavior is unchanged: sum over full patch."""
+    lat = np.linspace(-5, 5, 11)
+    lon = np.linspace(115, 125, 11)
+    window = build_centered_window(lat, lon, center_lat=0.0, center_lon=120.0,
+                                   window_size=11, core_size=3)
+    ones = np.ones(window.shape)
+    result = _patch_scores_from_maps(
+        window=window, patch_size=3, stride=2,
+        signed_cell_map=ones, abs_cell_map=ones,
+    )
+    assert result["abs_scores"].shape[0] == len(result["patches"])
+    # Without annulus_mask: each patch score = sum of 1.0 per cell = n_cells
+    for i, patch in enumerate(result["patches"]):
+        assert result["abs_scores"][i] == pytest.approx(float(patch.n_cells))
+
+
+def test_patch_scores_with_annulus_mask_restricts_scoring_to_annulus():
+    """With annulus_mask, only annulus cells count."""
+    lat = np.linspace(-5, 5, 11)
+    lon = np.linspace(115, 125, 11)
+    window = build_centered_window(lat, lon, center_lat=0.0, center_lon=120.0,
+                                   window_size=11, core_size=3)
+    abs_map = np.ones(window.shape)
+    # annulus = only top-left corner cell
+    annulus_mask = np.zeros(window.shape, dtype=bool)
+    annulus_mask[0, 0] = True
+
+    result = _patch_scores_from_maps(
+        window=window, patch_size=3, stride=2,
+        signed_cell_map=abs_map, abs_cell_map=abs_map,
+        annulus_mask=annulus_mask,
+    )
+    for i, patch in enumerate(result["patches"]):
+        covers_corner = bool(np.asarray(patch.mask, dtype=bool)[0, 0])
+        if covers_corner:
+            assert result["abs_scores"][i] > 0.0
+        else:
+            assert result["abs_scores"][i] == 0.0, f"patch {i} has no annulus overlap, expected 0"
+
+
+def test_patch_scores_normalized_by_annulus_cell_count():
+    """When all cells are in annulus and cell_map=1.0, normalized score = 1.0 for all patches."""
+    lat = np.linspace(-5, 5, 11)
+    lon = np.linspace(115, 125, 11)
+    window = build_centered_window(lat, lon, center_lat=0.0, center_lon=120.0,
+                                   window_size=11, core_size=3)
+    ones = np.ones(window.shape)
+    full_annulus = np.ones(window.shape, dtype=bool)
+
+    result = _patch_scores_from_maps(
+        window=window, patch_size=3, stride=2,
+        signed_cell_map=ones, abs_cell_map=ones,
+        annulus_mask=full_annulus,
+    )
+    np.testing.assert_allclose(result["abs_scores"], 1.0, rtol=1e-6,
+                                err_msg="All-1 map with full annulus should give normalized score=1.0")
+
+
+def test_no_overlap_patch_scores_zero_with_annulus_mask():
+    """Patches with no annulus intersection score 0.0."""
+    lat = np.linspace(-5, 5, 11)
+    lon = np.linspace(115, 125, 11)
+    window = build_centered_window(lat, lon, center_lat=0.0, center_lon=120.0,
+                                   window_size=11, core_size=3)
+    abs_map = np.ones(window.shape)
+    # annulus = only bottom-right corner
+    annulus_mask = np.zeros(window.shape, dtype=bool)
+    annulus_mask[-1, -1] = True
+
+    result = _patch_scores_from_maps(
+        window=window, patch_size=3, stride=2,
+        signed_cell_map=abs_map, abs_cell_map=abs_map,
+        annulus_mask=annulus_mask,
+    )
+    for i, patch in enumerate(result["patches"]):
+        covers = bool(np.asarray(patch.mask, dtype=bool)[-1, -1])
+        if not covers:
+            assert result["abs_scores"][i] == 0.0, f"patch {i} has no annulus cell, expected 0"
