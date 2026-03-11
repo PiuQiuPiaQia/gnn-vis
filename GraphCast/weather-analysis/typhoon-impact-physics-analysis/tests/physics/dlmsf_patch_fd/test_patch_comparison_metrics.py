@@ -53,16 +53,28 @@ def test_compute_alignment_metrics_returns_valid_fields():
         patch_size=5,
         ig_abs_scores=np.array([4.0, 3.0, 1.0]),
         dlmsf_parallel_scores=np.array([4.0, 2.0, 3.0]),
-        topk_fraction=0.34,
+        topk_k=2,
     )
 
-    # topk_fraction=0.34 * 3 patches → ceil(1.02)=2
-    assert metrics.topq_k == 2
+    assert metrics.topk_k == 2
     # top-2 of ig=[4,3,1] → indices {0,1}; top-2 of |dlmsf|=[4,2,3] → indices {0,2}; IoU=1/3
-    assert metrics.iou_topq == pytest.approx(1.0 / 3.0)
+    assert metrics.iou_topk == pytest.approx(1.0 / 3.0)
     assert metrics.direction == "along"
     assert metrics.patch_size == 5
     assert metrics.n_patches == 3
+
+
+def test_compute_alignment_metrics_caps_topk_at_valid_patch_count():
+    metrics = _compute_alignment_metrics(
+        direction_mode="along",
+        patch_size=5,
+        ig_abs_scores=np.array([4.0, 3.0, 1.0]),
+        dlmsf_parallel_scores=np.array([4.0, 2.0, 3.0]),
+        topk_k=50,
+    )
+
+    assert metrics.topk_k == 3
+    assert metrics.iou_topk == pytest.approx(1.0)
 
 
 def test_compute_single_deletion_curve_produces_correct_deltas(monkeypatch):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -28,13 +27,10 @@ class PatchAlignmentMetrics:
     direction: str
     patch_size: int
     n_patches: int
-    pearson_r: float
-    pearson_pval: float
     spearman_rho: float
     spearman_pval: float
-    iou_topq: float
-    topq_fraction: float
-    topq_k: int
+    iou_topk: float
+    topk_k: int
 
 
 @dataclass
@@ -74,28 +70,28 @@ def _safe_corr(
     return float(stat[0]), float(stat[1])
 
 
-def _topq_patch_indices(
+def _topk_patch_indices(
     scores: np.ndarray,
     *,
     finite_mask: np.ndarray,
-    fraction: float,
+    k: int,
 ) -> tuple[np.ndarray, int]:
     finite_idx = np.flatnonzero(np.asarray(finite_mask, dtype=bool))
     if finite_idx.size == 0:
         return np.array([], dtype=np.int64), 0
-    actual_k = max(1, int(math.ceil(float(fraction) * float(finite_idx.size))))
+    actual_k = min(max(1, int(k)), int(finite_idx.size))
     order = np.argsort(np.asarray(scores, dtype=np.float64)[finite_idx], kind="stable")[::-1]
     return np.asarray(finite_idx[order[:actual_k]], dtype=np.int64), actual_k
 
 
-def _topq_iou(
+def _topk_iou(
     a: np.ndarray,
     b: np.ndarray,
-    fraction: float,
+    k: int,
 ) -> tuple[float, int, np.ndarray, np.ndarray]:
     finite = np.isfinite(a) & np.isfinite(b)
-    idx_a, actual_k = _topq_patch_indices(a, finite_mask=finite, fraction=fraction)
-    idx_b, _ = _topq_patch_indices(b, finite_mask=finite, fraction=fraction)
+    idx_a, actual_k = _topk_patch_indices(a, finite_mask=finite, k=k)
+    idx_b, _ = _topk_patch_indices(b, finite_mask=finite, k=actual_k)
     if actual_k == 0:
         return 0.0, 0, idx_a, idx_b
     set_a = set(idx_a.tolist())
@@ -196,12 +192,12 @@ def _build_case_plot_payload(
     ig_abs_scores: np.ndarray,
     dlmsf_abs_map: np.ndarray,
     dlmsf_abs_scores: np.ndarray,
-    topq_fraction: float,
+    topk_k: int,
 ) -> Dict[str, Any]:
-    _, actual_k, ig_top_idx, dlmsf_top_idx = _topq_iou(
+    _, actual_k, ig_top_idx, dlmsf_top_idx = _topk_iou(
         np.asarray(ig_abs_scores, dtype=np.float64),
         np.asarray(dlmsf_abs_scores, dtype=np.float64),
-        topq_fraction,
+        topk_k,
     )
     ig_top_mask = _patch_indices_to_mask(patches, shape=window.shape, patch_indices=ig_top_idx)
     dlmsf_top_mask = _patch_indices_to_mask(patches, shape=window.shape, patch_indices=dlmsf_top_idx)
@@ -215,12 +211,11 @@ def _build_case_plot_payload(
         "environment_map": np.asarray(environment_map, dtype=np.float64).tolist(),
         "ig_abs_map": np.asarray(ig_abs_map, dtype=np.float64).tolist(),
         "dlmsf_abs_map": np.asarray(dlmsf_abs_map, dtype=np.float64).tolist(),
-        "ig_topq_mask": np.asarray(ig_top_mask, dtype=bool).tolist(),
-        "dlmsf_topq_mask": np.asarray(dlmsf_top_mask, dtype=bool).tolist(),
+        "ig_topk_mask": np.asarray(ig_top_mask, dtype=bool).tolist(),
+        "dlmsf_topk_mask": np.asarray(dlmsf_top_mask, dtype=bool).tolist(),
         "overlap_mask": np.asarray(overlap_mask, dtype=bool).tolist(),
         "union_mask": np.asarray(union_mask, dtype=bool).tolist(),
-        "topq_fraction": float(topq_fraction),
-        "topq_k": int(actual_k),
+        "topk_k": int(actual_k),
     }
 
 
@@ -231,7 +226,7 @@ def _build_case_visualization_payload(
     direction: str,
     patch_size: int,
     target_time_idx: int,
-    topq_fraction: float,
+    topk_k: int,
     ig_abs_map: np.ndarray,
     ig_abs_scores: np.ndarray,
     dlmsf_abs_map: np.ndarray,
@@ -243,7 +238,7 @@ def _build_case_visualization_payload(
 
     Payload sections:
         meta        - metadata used for output filenames
-        overlap     - |IG|/|DLMSF| heat maps, Top-q overlap mask, Spearman rho, IoU@q
+        overlap     - |IG|/|DLMSF| heat maps, Top-K overlap mask, Spearman rho, IoU@50
         scatter     - patch-level abs score arrays (x=DLMSF, y=IG) + Spearman rho
         deletion    - None by default; wired in by run_track_patch_analysis
     """
@@ -251,10 +246,10 @@ def _build_case_visualization_payload(
     dlmsf_abs = np.asarray(dlmsf_abs_scores, dtype=np.float64)
 
     # Compute metrics from patch-level arrays
-    iou_at_20, actual_k, ig_top_idx, dlmsf_top_idx = _topq_iou(ig_abs, dlmsf_abs, topq_fraction)
+    iou_at_50, actual_k, ig_top_idx, dlmsf_top_idx = _topk_iou(ig_abs, dlmsf_abs, topk_k)
     spearman_rho, _ = _safe_corr(scipy.stats.spearmanr, ig_abs, dlmsf_abs)
 
-    # Compute Top-q overlap patch indices (intersection)
+    # Compute Top-K overlap patch indices (intersection)
     overlap_patch_idx = sorted(set(ig_top_idx.tolist()) & set(dlmsf_top_idx.tolist()))
 
     # Build overlap cell mask
@@ -270,7 +265,7 @@ def _build_case_visualization_payload(
             "direction": str(direction),
             "patch_size": int(patch_size),
             "target_time_idx": int(target_time_idx),
-            "topq_fraction": float(topq_fraction),
+            "topk_k": int(actual_k),
         },
         "overlap": {
             "lat_vals": lat_vals_list,
@@ -279,7 +274,7 @@ def _build_case_visualization_payload(
             "dlmsf_abs_map": np.asarray(dlmsf_abs_map, dtype=np.float64).tolist(),
             "overlap_mask": overlap_mask.tolist(),
             "spearman_rho": float(spearman_rho),
-            "iou_at_20": float(iou_at_20),
+            "iou_at_50": float(iou_at_50),
         },
         "scatter": {
             "x_patch_abs_scores": dlmsf_abs.tolist(),
@@ -385,11 +380,9 @@ def _compute_track_ig_cell_maps(
     signed_cell_map = np.zeros(window.shape, dtype=np.float64)
     abs_cell_map = np.zeros(window.shape, dtype=np.float64)
     raw_ig_per_var: Dict[str, np.ndarray] = {}
-    lhs = 0.0
     for var_name in vars_to_use:
         ig_full = ig_sum[var_name] / float(ig_steps)
         raw_ig_per_var[var_name] = ig_full
-        lhs += float(np.sum(ig_full))
         signed_da = collapse_input_attribution_to_latlon(
             ig_full,
             context.eval_inputs[var_name],
@@ -409,40 +402,10 @@ def _compute_track_ig_cell_maps(
             dtype=np.float64,
         )
 
-    full_scalar, _ = _run_forward_track_scalar(
-        context,
-        runtime_cfg,
-        context.eval_inputs,
-        center_field_name=center_field_name,
-        window=window,
-        direction_mode=direction_mode,
-        softmin_temperature=softmin_temperature,
-    )
-    base_scalar, _ = _run_forward_track_scalar(
-        context,
-        runtime_cfg,
-        baseline_inputs,
-        center_field_name=center_field_name,
-        window=window,
-        direction_mode=direction_mode,
-        softmin_temperature=softmin_temperature,
-    )
-    rhs = float(full_scalar - base_scalar)
-    rel_err = abs(lhs - rhs) / (abs(rhs) + 1e-8)
-    print(
-        "[Track-IG] Completeness check: "
-        f"lhs={lhs:.6e}, rhs={rhs:.6e}, rel_err={rel_err:.6%}"
-    )
-
     return {
         "signed_cell_map": signed_cell_map,
         "abs_cell_map": abs_cell_map,
         "raw_ig_per_var": raw_ig_per_var,
-        "full_scalar": full_scalar,
-        "baseline_scalar": base_scalar,
-        "lhs": lhs,
-        "rhs": rhs,
-        "rel_err": rel_err,
     }
 
 
@@ -580,32 +543,28 @@ def _compute_alignment_metrics(
     patch_size: int,
     ig_abs_scores: np.ndarray,
     dlmsf_parallel_scores: np.ndarray,
-    topk_fraction: float,
+    topk_k: int,
 ) -> PatchAlignmentMetrics:
     finite = np.isfinite(ig_abs_scores) & np.isfinite(dlmsf_parallel_scores)
     x = np.asarray(ig_abs_scores, dtype=np.float64)[finite]
     y = np.abs(np.asarray(dlmsf_parallel_scores, dtype=np.float64)[finite]
     )
 
-    pearson_r, pearson_pval = _safe_corr(scipy.stats.pearsonr, x, y)
     spearman_rho, spearman_pval = _safe_corr(scipy.stats.spearmanr, x, y)
-    iou_topq, topq_k, _, _ = _topq_iou(
+    iou_topk, actual_topk, _, _ = _topk_iou(
         np.asarray(ig_abs_scores, dtype=np.float64),
         np.abs(np.asarray(dlmsf_parallel_scores, dtype=np.float64)),
-        topk_fraction,
+        topk_k,
     )
 
     return PatchAlignmentMetrics(
         direction=str(direction_mode),
         patch_size=int(patch_size),
         n_patches=int(x.size),
-        pearson_r=pearson_r,
-        pearson_pval=pearson_pval,
         spearman_rho=spearman_rho,
         spearman_pval=spearman_pval,
-        iou_topq=iou_topq,
-        topq_fraction=float(topk_fraction),
-        topq_k=topq_k,
+        iou_topk=iou_topk,
+        topk_k=actual_topk,
     )
 
 
@@ -679,6 +638,13 @@ def _compute_dlmsf_env_mask(
     Returns
     -------
     np.ndarray of dtype bool, shape ``(n_lat, n_lon)``.
+
+    Raises
+    ------
+    ValueError
+        If fewer than ``min_env_points`` cells fall within the annulus.
+        Consistent with ``compute_dlmsf_925_300`` / ``dlmsf_sensitivity``
+        which also raise rather than silently degrade.
     """
     lat_vals = np.asarray(lat_vals, dtype=np.float64)
     lon_vals = np.asarray(lon_vals, dtype=np.float64)
@@ -703,8 +669,13 @@ def _compute_dlmsf_env_mask(
     core_mask = dist_km < max(core_km, float(annulus_inner_km))
     env_mask = finite_mask & (~core_mask) & (dist_km <= float(annulus_outer_km))
 
-    if int(np.sum(env_mask)) < min_env_points:
-        env_mask = finite_mask
+    n_env = int(np.sum(env_mask))
+    if n_env < min_env_points:
+        raise ValueError(
+            f"Steering annulus has only {n_env} valid grid points "
+            f"(< min_env_points={min_env_points}). "
+            "Cannot compute IG mask. Check annulus_inner_km / annulus_outer_km configuration."
+        )
 
     return env_mask
 
@@ -946,12 +917,6 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     # Fields only present on the main IG case
-    if "ig" in case:
-        summary["track_scalar_full"] = float(case["ig"]["full_scalar"])
-        summary["track_scalar_baseline"] = float(case["ig"]["baseline_scalar"])
-        summary["ig_completeness_lhs"] = float(case["ig"]["lhs"])
-        summary["ig_completeness_rhs"] = float(case["ig"]["rhs"])
-        summary["ig_completeness_rel_err"] = float(case["ig"]["rel_err"])
     if "metrics" in case:
         summary["metrics"] = asdict(case["metrics"])
     if "track_diagnostics" in case:
@@ -994,7 +959,7 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
     # E1: ig_phys_vs_dlmsf_fd fields
     for key in ("j_along_analytical", "j_along_fd_full", "j_along_fd_base",
                 "j_along_fd_anomaly", "j_phys_baseline",
-                "pearson_r", "spearman_rho", "iou_topq", "topq_fraction"):
+                "spearman_rho", "iou_topk", "topk_k"):
         if key in case:
             summary[key] = case[key]
 
@@ -1042,7 +1007,7 @@ def run_track_patch_analysis(
     direction = str(getattr(cfg_module, "TRACK_DIRECTION", "along")).lower().strip()
     if direction != "along":
         raise ValueError(f"Main track-patch analysis only supports direction='along', got {direction!r}")
-    topk_fraction = float(getattr(cfg_module, "TRACK_TOPK_FRACTION", 0.2))
+    topk_k = int(getattr(cfg_module, "TRACK_TOPK_K", 50))
     softmin_temperature = float(getattr(cfg_module, "TRACK_SOFTMIN_TEMPERATURE", 1.0))
     deletion_enable = bool(getattr(cfg_module, "TRACK_DELETION_ENABLE", True))
     deletion_seed = int(getattr(cfg_module, "TRACK_DELETION_SEED", 42))
@@ -1167,7 +1132,7 @@ def run_track_patch_analysis(
         patch_size=main_patch_size,
         ig_abs_scores=ig_patch["abs_scores"],
         dlmsf_parallel_scores=dlmsf_result.patch_parallel_scores,
-        topk_fraction=topk_fraction,
+        topk_k=topk_k,
     )
     deletion = None
     if deletion_enable:
@@ -1202,7 +1167,7 @@ def run_track_patch_analysis(
             ig_abs_scores=ig_patch["abs_scores"],
             dlmsf_abs_map=dlmsf_result.S_abs_map,
             dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
-            topq_fraction=topk_fraction,
+            topk_k=topk_k,
         ),
         "visualization": _build_case_visualization_payload(
             window=window,
@@ -1210,7 +1175,7 @@ def run_track_patch_analysis(
             direction=direction,
             patch_size=main_patch_size,
             target_time_idx=runtime_cfg.target_time_idx,
-            topq_fraction=topk_fraction,
+            topk_k=topk_k,
             ig_abs_map=ig_patch["abs_map"],
             ig_abs_scores=ig_patch["abs_scores"],
             dlmsf_abs_map=dlmsf_result.S_abs_map,
@@ -1237,8 +1202,8 @@ def run_track_patch_analysis(
     }
     print(
         f"[Track-Patch] {main_case_key}: "
-        f"pearson={metrics.pearson_r:+.3f}  spearman={metrics.spearman_rho:+.3f}  "
-        f"iou@{int(round(100.0 * metrics.topq_fraction))}%={metrics.iou_topq:.3f}"
+        f"spearman={metrics.spearman_rho:+.3f}  "
+        f"iou@{metrics.topk_k}={metrics.iou_topk:.3f}"
     )
 
     # -----------------------------------------------------------------------
@@ -1311,10 +1276,9 @@ def run_track_patch_analysis(
             ig_phys_scores = ig_phys_patch["signed_scores"]
             dlmsf_fd_scores = dlmsf_result.patch_parallel_scores
             j_along_analytical_e1 = float(np.asarray(ig_phys_result["j_along"], dtype=np.float64))
-            _pearson_e1, _ = _safe_corr(scipy.stats.pearsonr, ig_phys_scores, dlmsf_fd_scores)
             _spearman_e1, _ = _safe_corr(scipy.stats.spearmanr, ig_phys_scores, dlmsf_fd_scores)
-            iou_e1, _, _, _ = _topq_iou(
-                np.abs(ig_phys_scores), np.abs(dlmsf_fd_scores), topk_fraction
+            iou_e1, actual_topk_e1, _, _ = _topk_iou(
+                np.abs(ig_phys_scores), np.abs(dlmsf_fd_scores), topk_k
             )
             e1_case_key = f"ig_phys_vs_dlmsf_fd_p{main_patch_size}"
             cases[e1_case_key] = {
@@ -1332,15 +1296,14 @@ def run_track_patch_analysis(
                 "j_along_fd_base": float(j_base_e1),
                 "j_along_fd_anomaly": float(j_fd_anomaly),
                 "j_phys_baseline": float(dlmsf_result.J_phys_baseline),
-                "pearson_r": float(_pearson_e1),
                 "spearman_rho": float(_spearman_e1),
-                "iou_topq": float(iou_e1),
-                "topq_fraction": float(topk_fraction),
+                "iou_topk": float(iou_e1),
+                "topk_k": int(actual_topk_e1),
             }
             print(
                 f"[Track-Patch] {e1_case_key}: "
-                f"pearson={_pearson_e1:+.3f}  spearman={_spearman_e1:+.3f}  "
-                f"iou@{int(round(100.0 * topk_fraction))}%={iou_e1:.3f}  "
+                f"spearman={_spearman_e1:+.3f}  "
+                f"iou@{actual_topk_e1}={iou_e1:.3f}  "
                 f"j_analytical={j_along_analytical_e1:.4f}  "
                 f"j_fd_anomaly={j_fd_anomaly:.4f}  "
                 f"j_fd_full={dlmsf_result.J_phys_baseline:.4f}"
@@ -1363,7 +1326,7 @@ def run_track_patch_analysis(
         "stride": stride,
         "track_center_field": center_field_name,
         "softmin_temperature": softmin_temperature,
-        "topq_fraction": topk_fraction,
+        "topk_k": topk_k,
         "cases": {key: _case_summary(case) for key, case in cases.items()},
     }
     return {

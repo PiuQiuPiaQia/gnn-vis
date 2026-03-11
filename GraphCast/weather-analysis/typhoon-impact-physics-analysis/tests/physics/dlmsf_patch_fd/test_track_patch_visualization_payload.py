@@ -60,7 +60,7 @@ def _dummy_payload_args(**overrides):
         direction="along",
         patch_size=3,
         target_time_idx=0,
-        topq_fraction=0.5,
+        topk_k=2,
         ig_abs_map=np.array([[1.0, 2.0, 3.0]]),
         ig_abs_scores=np.array([5.0, 4.0, 1.0]),
         dlmsf_abs_map=np.array([[2.0, 3.0, 1.0]]),
@@ -104,9 +104,9 @@ class TestVisualizationMeta:
         payload = _build_case_visualization_payload(**_dummy_payload_args())
         assert payload["meta"]["target_time_idx"] == 0
 
-    def test_meta_contains_topq_fraction(self):
+    def test_meta_contains_topk_k(self):
         payload = _build_case_visualization_payload(**_dummy_payload_args())
-        assert payload["meta"]["topq_fraction"] == pytest.approx(0.5)
+        assert payload["meta"]["topk_k"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -120,10 +120,10 @@ class TestVisualizationOverlap:
         assert "spearman_rho" in payload["overlap"]
         assert np.isfinite(payload["overlap"]["spearman_rho"])
 
-    def test_overlap_contains_iou_at_20(self):
+    def test_overlap_contains_iou_at_50(self):
         payload = _build_case_visualization_payload(**_dummy_payload_args())
-        assert "iou_at_20" in payload["overlap"]
-        assert np.isfinite(payload["overlap"]["iou_at_20"])
+        assert "iou_at_50" in payload["overlap"]
+        assert np.isfinite(payload["overlap"]["iou_at_50"])
 
     def test_overlap_contains_serializable_ig_abs_map(self):
         payload = _build_case_visualization_payload(**_dummy_payload_args())
@@ -176,20 +176,17 @@ def _dummy_metrics() -> PatchAlignmentMetrics:
         direction="along",
         patch_size=3,
         n_patches=4,
-        pearson_r=0.6,
-        pearson_pval=0.1,
         spearman_rho=0.7,
         spearman_pval=0.05,
-        iou_topq=0.5,
-        topq_fraction=0.2,
-        topq_k=1,
+        iou_topk=0.5,
+        topk_k=50,
     )
 
 
 def _dummy_visualization_payload() -> dict:
     return {
-        "meta": {"direction": "along", "patch_size": 3, "target_time_idx": 0, "topq_fraction": 0.2},
-        "overlap": {"spearman_rho": 0.7, "iou_at_20": 0.5, "ig_abs_map": [[1.0]], "dlmsf_abs_map": [[2.0]],
+        "meta": {"direction": "along", "patch_size": 3, "target_time_idx": 0, "topk_k": 50},
+        "overlap": {"spearman_rho": 0.7, "iou_at_50": 0.5, "ig_abs_map": [[1.0]], "dlmsf_abs_map": [[2.0]],
                      "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
         "scatter": {"x_patch_abs_scores": [1.0], "y_patch_abs_scores": [2.0], "spearman_rho": 0.7},
         "deletion": None,

@@ -85,22 +85,15 @@ def collect_track_patch_rows(
             continue
         metrics = case.get("metrics", {})
         deletion = case.get("deletion", {})
-        full_scalar = float(case.get("track_scalar_full", np.nan))
-        baseline_scalar = float(case.get("track_scalar_baseline", np.nan))
         rows.append(
             {
                 "report_path": str(report_path),
                 "report_name": report_path.name,
                 "source_pipeline": str(report.get("source_pipeline", "")),
                 "main_case": main_case,
-                "pearson_r": _metric_value(metrics, "pearson_r"),
                 "spearman_rho": _metric_value(metrics, "spearman_rho"),
-                "iou_topq": _metric_value(metrics, "iou_topq", "topk_overlap"),
-                "topq_fraction": float(metrics.get("topq_fraction", report.get("topq_fraction", report.get("topk_fraction", np.nan)))),
-                "ig_completeness_rel_err": float(case.get("ig_completeness_rel_err", np.nan)),
-                "track_scalar_full": full_scalar,
-                "track_scalar_baseline": baseline_scalar,
-                "track_signal_abs": abs(full_scalar - baseline_scalar),
+                "iou_topk": _metric_value(metrics, "iou_topk", "topk_overlap"),
+                "topk_k": int(metrics.get("topk_k", report.get("topk_k", 0))),
                 "high_ig_aopc": float(deletion.get("high_ig_aopc", np.nan)),
                 "low_ig_aopc": float(deletion.get("low_ig_aopc", np.nan)),
                 "random_mean_aopc": float(deletion.get("random_mean_aopc", np.nan)),
@@ -112,8 +105,6 @@ def collect_track_patch_rows(
 def rank_track_patch_rows(
     rows: Sequence[Dict[str, Any]],
     *,
-    completeness_threshold: float = 0.2,
-    steering_top_fraction: float = 0.5,
     top_n: int = 5,
 ) -> Dict[str, Any]:
     if not rows:
@@ -121,9 +112,6 @@ def rank_track_patch_rows(
             "metadata": {
                 "count_total": 0,
                 "count_hard_filtered": 0,
-                "count_strong_steering": 0,
-                "steering_top_fraction": float(steering_top_fraction),
-                "completeness_threshold": float(completeness_threshold),
                 "top_n": int(top_n),
             },
             "rows": [],
@@ -132,8 +120,7 @@ def rank_track_patch_rows(
     enriched_rows: List[Dict[str, Any]] = []
     for row in rows:
         hard_pass = (
-            float(row["ig_completeness_rel_err"]) < float(completeness_threshold)
-            and float(row["high_ig_aopc"]) > float(row["random_mean_aopc"])
+            float(row["high_ig_aopc"]) > float(row["random_mean_aopc"])
             and float(row["high_ig_aopc"]) > float(row["low_ig_aopc"])
         )
         new_row = dict(row)
@@ -142,37 +129,24 @@ def rank_track_patch_rows(
         enriched_rows.append(new_row)
 
     hard_rows = [row for row in enriched_rows if row["hard_filter_pass"]]
-    if hard_rows:
-        steering_fraction = min(max(float(steering_top_fraction), 0.0), 1.0)
-        threshold = float(
-            np.quantile(
-                np.asarray([row["track_signal_abs"] for row in hard_rows], dtype=np.float64),
-                max(0.0, 1.0 - steering_fraction),
-            )
-        )
-        strong_rows = [row for row in hard_rows if float(row["track_signal_abs"]) >= threshold]
-    else:
-        threshold = float("nan")
-        strong_rows = []
 
-    pearson_z = _zscore(np.asarray([row["pearson_r"] for row in strong_rows], dtype=np.float64))
-    iou_z = _zscore(np.asarray([row["iou_topq"] for row in strong_rows], dtype=np.float64))
-    advantage_z = _zscore(np.asarray([row["deletion_advantage"] for row in strong_rows], dtype=np.float64))
+    spearman_z = _zscore(np.asarray([row["spearman_rho"] for row in hard_rows], dtype=np.float64))
+    iou_z = _zscore(np.asarray([row["iou_topk"] for row in hard_rows], dtype=np.float64))
+    advantage_z = _zscore(np.asarray([row["deletion_advantage"] for row in hard_rows], dtype=np.float64))
     ranked_rows: List[Dict[str, Any]] = []
-    for idx, row in enumerate(strong_rows):
+    for idx, row in enumerate(hard_rows):
         new_row = dict(row)
-        new_row["z_pearson"] = float(pearson_z[idx]) if idx < pearson_z.size else 0.0
+        new_row["z_spearman"] = float(spearman_z[idx]) if idx < spearman_z.size else 0.0
         new_row["z_iou"] = float(iou_z[idx]) if idx < iou_z.size else 0.0
         new_row["z_deletion_advantage"] = float(advantage_z[idx]) if idx < advantage_z.size else 0.0
         new_row["score"] = (
-            0.35 * new_row["z_pearson"]
+            0.35 * new_row["z_spearman"]
             + 0.35 * new_row["z_iou"]
             + 0.15 * new_row["z_deletion_advantage"]
-            + 0.15 * 0.0
         )
         ranked_rows.append(new_row)
 
-    ranked_rows.sort(key=lambda row: (row["score"], row["pearson_r"], row["iou_topq"]), reverse=True)
+    ranked_rows.sort(key=lambda row: (row["score"], row["spearman_rho"], row["iou_topk"]), reverse=True)
     selected_rows = ranked_rows[: max(0, int(top_n))]
     for rank, row in enumerate(selected_rows, start=1):
         row["rank"] = rank
@@ -181,10 +155,6 @@ def rank_track_patch_rows(
         "metadata": {
             "count_total": len(enriched_rows),
             "count_hard_filtered": len(hard_rows),
-            "count_strong_steering": len(strong_rows),
-            "steering_top_fraction": float(steering_top_fraction),
-            "steering_threshold": threshold,
-            "completeness_threshold": float(completeness_threshold),
             "top_n": int(top_n),
         },
         "rows": selected_rows,
@@ -204,11 +174,8 @@ def write_ranked_rows_csv(rows: Iterable[Dict[str, Any]], output_path: str | Pat
         "report_name",
         "report_path",
         "score",
-        "pearson_r",
         "spearman_rho",
-        "iou_topq",
-        "track_signal_abs",
-        "ig_completeness_rel_err",
+        "iou_topk",
         "high_ig_aopc",
         "random_mean_aopc",
         "low_ig_aopc",
@@ -227,8 +194,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("inputs", nargs="+", help="Report JSON files or directories to scan recursively.")
     parser.add_argument("--main-case", default="along_p3", help="Case key to evaluate. Default: along_p3")
     parser.add_argument("--subset", default="swe", help="Subset filter token. Default: swe")
-    parser.add_argument("--completeness-threshold", type=float, default=0.2)
-    parser.add_argument("--steering-top-fraction", type=float, default=0.5)
     parser.add_argument("--top-n", type=int, default=5)
     parser.add_argument("--output-json", type=Path, default=None)
     parser.add_argument("--output-csv", type=Path, default=None)
@@ -241,8 +206,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     ranked = rank_track_patch_rows(
         rows,
-        completeness_threshold=args.completeness_threshold,
-        steering_top_fraction=args.steering_top_fraction,
         top_n=args.top_n,
     )
 

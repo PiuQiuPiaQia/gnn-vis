@@ -84,16 +84,16 @@ def _plot_field(
 # ---------------------------------------------------------------------------
 
 
-def _format_overlap_annotation(*, spearman_rho: float, iou_at_20: float) -> str:
-    """Return annotation string for the overlap figure. No Pearson."""
+def _format_overlap_annotation(*, spearman_rho: float, iou_at_50: float) -> str:
+    """Return annotation string for the overlap figure."""
     return (
         f"Spearman \u03c1: {float(spearman_rho):+.3f}\n"
-        f"IoU@20%: {float(iou_at_20):.3f}"
+        f"IoU@50: {float(iou_at_50):.3f}"
     )
 
 
 def _format_scatter_annotation(*, spearman_rho: float) -> str:
-    """Return annotation string for the scatter figure. No Pearson."""
+    """Return annotation string for the scatter figure."""
     return f"Spearman \u03c1: {float(spearman_rho):+.3f}"
 
 
@@ -109,11 +109,11 @@ def _format_deletion_annotation(
 
 
 # ---------------------------------------------------------------------------
-# Figure 1: |IG| + |DLMSF| heatmaps + Top-q overlap binary map
+# Figure 1: |IG| + |DLMSF| heatmaps + Top-K overlap binary map
 # ---------------------------------------------------------------------------
 
 
-def plot_track_patch_overlap_q20(
+def plot_track_patch_overlap_k50(
     report_or_path, output_path: str | Path, dpi: int = 200
 ) -> Path | None:
     report = _load_report(report_or_path)
@@ -132,11 +132,11 @@ def plot_track_patch_overlap_q20(
     dlmsf_abs_map = _as_float_array(overlap["dlmsf_abs_map"], ndim=2)
     overlap_mask = _as_bool_array(overlap["overlap_mask"], ndim=2)
     spearman_rho = float(overlap["spearman_rho"])
-    iou_at_20 = float(overlap["iou_at_20"])
+    iou_at_50 = float(overlap["iou_at_50"])
 
     meta = viz.get("meta", {})
     direction = str(meta.get("direction", "along"))
-    topq_pct = int(round(float(meta.get("topq_fraction", 0.2)) * 100))
+    topk_k = int(meta.get("topk_k", 50))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,7 +181,7 @@ def plot_track_patch_overlap_q20(
         cmap=overlap_cmap,
         norm=overlap_norm,
     )
-    axes[2].set_title(f"Top-{topq_pct}% Overlap")
+    axes[2].set_title(f"Top-{topk_k} Overlap")
     axes[2].set_xlabel("Longitude")
     axes[2].set_ylabel("Latitude")
     axes[2].legend(
@@ -194,7 +194,7 @@ def plot_track_patch_overlap_q20(
         fontsize=8,
     )
 
-    annotation = _format_overlap_annotation(spearman_rho=spearman_rho, iou_at_20=iou_at_20)
+    annotation = _format_overlap_annotation(spearman_rho=spearman_rho, iou_at_50=iou_at_50)
     axes[2].text(
         0.98,
         0.98,
@@ -380,14 +380,14 @@ def write_track_patch_figures(
     direction = str(meta.get("direction", "along"))
     patch_size = int(meta.get("patch_size", 3))
     target_time_idx = int(meta.get("target_time_idx", 0))
-    topq_pct = int(round(float(meta.get("topq_fraction", 0.2)) * 100))
+    topk_k = int(meta.get("topk_k", 50))
 
-    p1 = output_dir / f"dlmsf_{direction}_overlap_q{topq_pct}_t{target_time_idx}.png"
+    p1 = output_dir / f"dlmsf_{direction}_overlap_k{topk_k}_t{target_time_idx}.png"
     p2 = output_dir / f"dlmsf_{direction}_scatter_t{target_time_idx}.png"
     p3 = output_dir / f"deletion_validation_{direction}_p{patch_size}.png"
     outputs: List[Path] = []
 
-    result = plot_track_patch_overlap_q20(report, p1, dpi=dpi)
+    result = plot_track_patch_overlap_k50(report, p1, dpi=dpi)
     if result is not None:
         outputs.append(result)
 

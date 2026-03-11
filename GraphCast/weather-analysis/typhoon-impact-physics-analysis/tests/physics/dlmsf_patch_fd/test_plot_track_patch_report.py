@@ -24,7 +24,7 @@ def _dummy_visualization_payload():
             "direction": "along",
             "patch_size": 3,
             "target_time_idx": 0,
-            "topq_fraction": 0.2,
+            "topk_k": 50,
         },
         "overlap": {
             "lat_vals": lat_vals,
@@ -33,7 +33,7 @@ def _dummy_visualization_payload():
             "dlmsf_abs_map": [[0.1, 0.6, 0.2], [0.4, float("nan"), 0.2], [0.2, 0.3, 0.5]],
             "overlap_mask": mask33,
             "spearman_rho": 0.7,
-            "iou_at_20": 0.5,
+            "iou_at_50": 0.5,
         },
         "scatter": {
             "x_patch_abs_scores": [0.6, 0.4, 0.2, 0.3, 0.5],
@@ -61,15 +61,13 @@ def _dummy_report():
         "stride": 2,
         "track_center_field": "mean_sea_level_pressure",
         "softmin_temperature": 1.0,
-        "topq_fraction": 0.2,
+        "topk_k": 50,
         "cases": {
             "along_p3": {
                 "metrics": {
-                    "pearson_r": 0.6,
                     "spearman_rho": 0.7,
-                    "iou_topq": 0.5,
-                    "topq_fraction": 0.2,
-                    "topq_k": 4,
+                    "iou_topk": 0.5,
+                    "topk_k": 50,
                 },
                 "plot": {},
                 "visualization": _dummy_visualization_payload(),
@@ -95,7 +93,7 @@ def _dummy_report():
 # ---------------------------------------------------------------------------
 
 EXPECTED_NAMES = [
-    "dlmsf_along_overlap_q20_t0.png",
+    "dlmsf_along_overlap_k50_t0.png",
     "dlmsf_along_scatter_t0.png",
     "deletion_validation_along_p3.png",
 ]
@@ -129,7 +127,7 @@ def test_prefix_does_not_change_fixed_output_names(tmp_path):
     outputs = write_track_patch_figures(
         _dummy_report(), output_dir=tmp_path, prefix="custom", dpi=100
     )
-    assert outputs[0].name == "dlmsf_along_overlap_q20_t0.png"
+    assert outputs[0].name == "dlmsf_along_overlap_k50_t0.png"
 
 
 def test_write_track_patch_figures_returns_exactly_three_files(tmp_path):
@@ -138,24 +136,23 @@ def test_write_track_patch_figures_returns_exactly_three_files(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Tests: Pearson must not appear in rendered text annotations
+# Tests: annotations stay Spearman-only
 # ---------------------------------------------------------------------------
 
-def test_overlap_figure_annotation_does_not_contain_pearson(tmp_path):
-    """Overlap figure must only show Spearman and IoU, never Pearson."""
+def test_overlap_figure_annotation_uses_spearman_and_iou(tmp_path):
+    """Overlap figure annotation should show Spearman and IoU text only."""
     from physics.dlmsf_patch_fd.plot_track_patch_report import _format_overlap_annotation
-    text = _format_overlap_annotation(spearman_rho=0.72, iou_at_20=0.45)
-    assert "Pearson" not in text
-    assert "pearson" not in text.lower()
+    text = _format_overlap_annotation(spearman_rho=0.72, iou_at_50=0.45)
+    assert "Spearman" in text
     assert "0.72" in text or "ρ" in text or "rho" in text.lower()
+    assert "IoU@50" in text
 
 
-def test_scatter_figure_annotation_does_not_contain_pearson(tmp_path):
-    """Scatter figure must only show Spearman, never Pearson."""
+def test_scatter_figure_annotation_uses_spearman_only(tmp_path):
+    """Scatter figure annotation should contain the Spearman label."""
     from physics.dlmsf_patch_fd.plot_track_patch_report import _format_scatter_annotation
     text = _format_scatter_annotation(spearman_rho=0.65)
-    assert "Pearson" not in text
-    assert "pearson" not in text.lower()
+    assert "Spearman" in text
 
 
 def test_deletion_figure_annotation_does_not_contain_auc(tmp_path):

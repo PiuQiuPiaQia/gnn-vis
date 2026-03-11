@@ -20,11 +20,11 @@
   "groups": {
     "h": {
       "_comment": "SWE 敏感度图与 GNN IG 图在排序与热点重叠上的一致性。",
-      "spearman_rho": -0.045,
-      "spearman_pval": 0.0721,
+      "spearman_rho": -0.0455,
+      "spearman_pval": 0.069,
       "topk_iou": {
         "k20": 0.4815,
-        "k50": 0.6667,
+        "k50": 0.6949,
         "k100": 0.626,
         "k200": 0.7621
       },

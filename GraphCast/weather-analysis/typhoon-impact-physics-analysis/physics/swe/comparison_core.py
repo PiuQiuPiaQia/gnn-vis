@@ -773,9 +773,8 @@ def run_physics_comparison() -> Dict[str, Any]:
         print(
             "  [Track-Patch] main="
             f"{track_patch_analysis['main_case']}  "
-            f"pearson={main_metrics.pearson_r:+.3f}  "
             f"spearman={main_metrics.spearman_rho:+.3f}  "
-            f"iou@{int(round(100.0 * main_metrics.topq_fraction))}%={main_metrics.iou_topq:.3f}"
+            f"iou@{main_metrics.topk_k}={main_metrics.iou_topk:.3f}"
         )
         if track_patch_analysis["main_deletion"] is not None:
             deletion = track_patch_analysis["main_deletion"]

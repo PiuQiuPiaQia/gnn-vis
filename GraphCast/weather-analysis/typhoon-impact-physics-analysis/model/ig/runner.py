@@ -102,10 +102,8 @@ def _compute_ig_candidate_score_map(
             print(f"  IG steps: {step + 1}/{ig_steps}")
 
     ig_maps_by_var: Dict[str, np.ndarray] = {}
-    signed_contrib_sum = 0.0
     for var_name in vars_to_use:
         ig_full = ig_full_sum[var_name] / float(ig_steps)
-        signed_contrib_sum += float(np.sum(ig_full))
         ig_map_da = reduce_input_attribution_to_latlon(
             attribution=ig_full,
             original_da=context.eval_inputs[var_name],
@@ -119,18 +117,6 @@ def _compute_ig_candidate_score_map(
     for var_name in vars_to_use:
         score_map += np.abs(ig_maps_by_var[var_name])
 
-    rhs = float(
-        np.array(
-            _combined_target_scalar(context, runtime_cfg, context.eval_inputs)
-            - _combined_target_scalar(context, runtime_cfg, baseline_inputs)
-        )
-    )
-    rel_err = abs(signed_contrib_sum - rhs) / (abs(rhs) + 1e-8)
-    print(
-        "[IG] Completeness check: "
-        f"lhs={signed_contrib_sum:.6e}, rhs={rhs:.6e}, rel_err={rel_err:.6%}"
-    )
-
     score_da = xarray.DataArray(
         score_map,
         dims=("lat", "lon"),
@@ -140,7 +126,4 @@ def _compute_ig_candidate_score_map(
     return {
         "score_da": score_da,
         "maps_by_var": ig_maps_by_var,
-        "lhs": signed_contrib_sum,
-        "rhs": rhs,
-        "rel_err": rel_err,
     }

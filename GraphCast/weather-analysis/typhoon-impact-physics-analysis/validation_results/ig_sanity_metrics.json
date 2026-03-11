@@ -1,9 +1,9 @@
 {
   "status": "ok",
   "passed": true,
-  "topk_mean": 234.54296875,
-  "rand_mean": 1.41015625,
-  "lift_ratio": 166.3240997229917,
+  "topk_mean": 235.06640625,
+  "rand_mean": 1.19921875,
+  "lift_ratio": 196.01628664495115,
   "min_lift_ratio": 1.1,
   "topk_size": 10,
   "random_size": 10,
@@ -12,54 +12,54 @@
     {
       "lat": -22.0,
       "lon": 158.0,
-      "delta_abs_mean": 263.2109375
+      "delta_abs_mean": 266.859375
     },
     {
       "lat": -24.0,
       "lon": 158.0,
-      "delta_abs_mean": 262.1640625
+      "delta_abs_mean": 264.7734375
     },
     {
       "lat": -23.0,
       "lon": 158.0,
-      "delta_abs_mean": 248.6171875
+      "delta_abs_mean": 251.2265625
     },
     {
       "lat": -23.0,
       "lon": 159.0,
-      "delta_abs_mean": 247.5703125
+      "delta_abs_mean": 249.140625
     },
     {
       "lat": -22.0,
       "lon": 157.0,
-      "delta_abs_mean": 244.4453125
+      "delta_abs_mean": 243.9296875
     }
   ],
   "random_excerpts": [
     {
-      "lat": -54.0,
-      "lon": 33.0,
-      "delta_abs_mean": 4.171875
+      "lat": 2.0,
+      "lon": 46.0,
+      "delta_abs_mean": 2.6015625
     },
     {
       "lat": 28.0,
       "lon": 157.0,
-      "delta_abs_mean": 2.609375
+      "delta_abs_mean": 2.0859375
     },
     {
-      "lat": 61.0,
-      "lon": 162.0,
+      "lat": -75.0,
+      "lon": 251.0,
+      "delta_abs_mean": 2.0859375
+    },
+    {
+      "lat": 39.0,
+      "lon": 282.0,
       "delta_abs_mean": 1.5625
     },
     {
-      "lat": -12.0,
-      "lon": 309.0,
-      "delta_abs_mean": 1.046875
-    },
-    {
-      "lat": 43.0,
-      "lon": 274.0,
-      "delta_abs_mean": 1.046875
+      "lat": -74.0,
+      "lon": 278.0,
+      "delta_abs_mean": 1.0390625
     }
   ]
 }

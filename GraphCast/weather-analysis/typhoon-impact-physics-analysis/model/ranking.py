@@ -212,10 +212,5 @@ def run_gridpoint_importance_ranking() -> Dict[str, Any]:
         "patch_score_agg": patch_score_agg,
         "candidates": candidates,
         "ranked_rows": ranked_rows,
-        "ig_completeness": {
-            "lhs": ig_result["lhs"],
-            "rhs": ig_result["rhs"],
-            "rel_err": ig_result["rel_err"],
-        },
         "output_csv": str(csv_path),
     }

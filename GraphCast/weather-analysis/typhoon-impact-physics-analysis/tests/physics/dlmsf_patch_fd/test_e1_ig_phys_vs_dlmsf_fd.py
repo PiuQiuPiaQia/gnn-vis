@@ -82,6 +82,7 @@ class TestComputeDlmsfEnvMask:
             core_radius_deg=2.0,
             annulus_inner_km=200.0,
             annulus_outer_km=900.0,
+            min_env_points=1,  # tiny grid; test targets geometry, not min-point threshold
         )
         # dist ~500 km > inner_km=200 and < outer_km=900 and > core_km → True
         assert mask[1, 0] == True
@@ -186,8 +187,8 @@ def test_compute_dlmsf_env_mask_finite_mask_excludes_nan_cells():
     assert not mask_with_nan[3, 3], "NaN cell must be excluded"
 
 
-def test_compute_dlmsf_env_mask_min_env_points_fallback():
-    """If fewer than min_env_points qualify, fall back to finite_mask."""
+def test_compute_dlmsf_env_mask_raises_when_insufficient_points():
+    """If fewer than min_env_points qualify, raise ValueError (no silent fallback)."""
     from physics.dlmsf_patch_fd.patch_comparison import _compute_dlmsf_env_mask
 
     W = 5
@@ -195,15 +196,15 @@ def test_compute_dlmsf_env_mask_min_env_points_fallback():
     lon = np.linspace(120.0, 124.0, W)
     center_lat, center_lon = 22.0, 122.0
 
-    mask = _compute_dlmsf_env_mask(
-        lat_vals=lat, lon_vals=lon,
-        center_lat=center_lat, center_lon=center_lon,
-        core_radius_deg=0.0,
-        annulus_inner_km=99000.0,
-        annulus_outer_km=99001.0,
-        min_env_points=1,
-    )
-    assert mask.all(), "Fallback must yield all-True when no NaN provided"
+    with pytest.raises(ValueError, match="Steering annulus has only 0 valid grid points"):
+        _compute_dlmsf_env_mask(
+            lat_vals=lat, lon_vals=lon,
+            center_lat=center_lat, center_lon=center_lon,
+            core_radius_deg=0.0,
+            annulus_inner_km=99000.0,
+            annulus_outer_km=99001.0,
+            min_env_points=1,
+        )
 
 
 def test_filter_uv_to_band_raises_if_no_levels_in_band():
