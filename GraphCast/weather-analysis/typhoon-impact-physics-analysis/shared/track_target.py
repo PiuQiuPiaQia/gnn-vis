@@ -14,7 +14,7 @@ from cyclone_points import CYCLONE_CENTERS, pick_target_cyclone
 from shared.patch_geometry import CenteredWindow
 
 
-DirectionMode = Literal["along", "cross"]
+DirectionMode = Literal["along"]
 
 
 @dataclass(frozen=True)
@@ -78,8 +78,6 @@ def axis_from_reference(
     direction = str(direction_mode).lower().strip()
     if direction == "along":
         return track_ref.along_hat
-    if direction == "cross":
-        return track_ref.cross_hat
     raise ValueError(f"Unsupported direction_mode: {direction_mode}")
 
 

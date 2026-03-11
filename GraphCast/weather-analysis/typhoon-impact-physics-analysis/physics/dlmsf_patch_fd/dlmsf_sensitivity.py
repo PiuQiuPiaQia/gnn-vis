@@ -48,22 +48,9 @@ def compute_d_hat(
     return float(dlon / mag), float(dlat / mag)
 
 
-def _projection_axis(
-    d_hat: Tuple[float, float],
-    direction_mode: str,
-) -> Tuple[float, float]:
-    d_u, d_v = d_hat
-    mag = math.hypot(d_u, d_v)
-    if mag < 1e-10:
-        return 0.0, 0.0
-    d_u /= mag
-    d_v /= mag
-    mode = str(direction_mode).lower().strip()
-    if mode == "along":
-        return float(d_u), float(d_v)
-    if mode == "cross":
-        return float(-d_v), float(d_u)
-    raise ValueError(f"Unsupported direction_mode: {direction_mode}")
+def _projection_axis(d_hat: Tuple[float, float]) -> Tuple[float, float]:
+    """Return the along-track projection axis from the unit direction vector."""
+    return float(d_hat[0]), float(d_hat[1])
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -230,7 +217,7 @@ def compute_dlmsf_patch_fd(
     levels_top_hpa: float = 300.0,
 ) -> DLMSFSensitivityResult:
     t0 = time.perf_counter()
-    axis_u, axis_v = _projection_axis(d_hat, direction_mode)
+    axis_u, axis_v = _projection_axis(d_hat)
     patches = build_sliding_patches(window, patch_size=patch_size, stride=stride)
 
     if not patches or (abs(axis_u) < 1e-12 and abs(axis_v) < 1e-12):

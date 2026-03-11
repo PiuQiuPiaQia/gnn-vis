@@ -145,41 +145,6 @@ class TestDlmsfPatchAblation:
         )
         assert np.all(result.patch_magnitude_scores >= result.patch_parallel_scores)
 
-    def test_cross_track_uses_perpendicular_projection(self):
-        ds = _make_eval_inputs(u_val=5.0, v_val=3.0)
-        baseline = _make_eval_inputs(u_val=0.0, v_val=0.0)
-        window = _make_window(ds)
-        patches = build_sliding_patches(window, patch_size=5, stride=2)
-        total_cells = float(np.prod(window.shape))
-
-        def fake_compute(u_levels, v_levels, levels_hpa, lat_vals, lon_vals, center_lat, center_lon, **kwargs):
-            return float(np.mean(u_levels)), float(np.mean(v_levels))
-
-        with patch(
-            "physics.dlmsf_patch_fd.dlmsf_sensitivity.compute_dlmsf_925_300",
-            side_effect=fake_compute,
-        ):
-            result = compute_dlmsf_patch_fd(
-                eval_inputs=ds,
-                baseline_inputs=baseline,
-                window=window,
-                center_lat=0.0,
-                center_lon=120.0,
-                d_hat=(1.0, 0.0),
-                target_time_idx=0,
-                patch_size=5,
-                stride=2,
-                direction_mode="cross",
-            )
-
-        expected_cross = np.array(
-            [(3.0 * patch.n_cells) / total_cells for patch in patches],
-            dtype=np.float64,
-        )
-        np.testing.assert_allclose(result.patch_parallel_scores, expected_cross, rtol=1e-6)
-        assert result.axis_name == "cross"
-        np.testing.assert_allclose(result.d_hat, (0.0, 1.0), rtol=1e-6)
-
     def test_overlap_maps_are_nonnegative_for_abs_and_magnitude(self):
         ds = _make_eval_inputs()
         baseline = _make_eval_inputs(u_val=0.0, v_val=0.0)
