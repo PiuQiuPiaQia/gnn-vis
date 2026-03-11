@@ -82,7 +82,7 @@ class TestComputeDlmsf925300:
                 annulus_outer_km=9999.0,
             )
 
-    def test_fallback_when_env_points_insufficient(self):
+    def test_raises_when_env_points_insufficient(self):
         """当 annulus 内有效点不足时，应抛出 ValueError 而非静默退化。"""
         levels = np.array([925, 500, 300], dtype=np.float32)
         u, v, lat, lon = _make_inputs(levels, u_val=4.0, v_val=2.0)

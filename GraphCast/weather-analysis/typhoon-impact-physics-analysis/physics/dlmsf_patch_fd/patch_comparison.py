@@ -1184,23 +1184,32 @@ def run_track_patch_analysis(
         signed_cell_map=ig_maps["signed_cell_map"],
         abs_cell_map=ig_maps["abs_cell_map"],
     )
-    dlmsf_result = compute_dlmsf_patch_fd(
-        eval_inputs=context.eval_inputs,
-        baseline_inputs=baseline_inputs,
-        window=window,
-        center_lat=track_ref.init_lat,
-        center_lon=track_ref.init_lon,
-        d_hat=track_ref.along_hat,
-        target_time_idx=runtime_cfg.target_time_idx,
-        patch_size=main_patch_size,
-        stride=stride,
-        direction_mode=direction,
-        core_radius_deg=float(getattr(cfg_module, "SWE_CORE_RADIUS_DEG", 3.0)),
-        annulus_inner_km=float(getattr(cfg_module, "SWE_STEERING_ANNULUS_INNER_KM", 300.0)),
-        annulus_outer_km=float(getattr(cfg_module, "SWE_STEERING_ANNULUS_OUTER_KM", 900.0)),
-        levels_bottom_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_BOTTOM_HPA", 925.0)),
-        levels_top_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_TOP_HPA", 300.0)),
-    )
+    try:
+        dlmsf_result = compute_dlmsf_patch_fd(
+            eval_inputs=context.eval_inputs,
+            baseline_inputs=baseline_inputs,
+            window=window,
+            center_lat=track_ref.init_lat,
+            center_lon=track_ref.init_lon,
+            d_hat=track_ref.along_hat,
+            target_time_idx=runtime_cfg.target_time_idx,
+            patch_size=main_patch_size,
+            stride=stride,
+            direction_mode=direction,
+            core_radius_deg=float(getattr(cfg_module, "SWE_CORE_RADIUS_DEG", 3.0)),
+            annulus_inner_km=float(getattr(cfg_module, "SWE_STEERING_ANNULUS_INNER_KM", 300.0)),
+            annulus_outer_km=float(getattr(cfg_module, "SWE_STEERING_ANNULUS_OUTER_KM", 900.0)),
+            levels_bottom_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_BOTTOM_HPA", 925.0)),
+            levels_top_hpa=float(getattr(cfg_module, "DLMSF_LEVELS_TOP_HPA", 300.0)),
+        )
+    except ValueError as exc:
+        import warnings
+        warnings.warn(
+            f"[Track-Patch] DLMSF computation failed for {main_case_key}: {exc}. "
+            f"Skipping DLMSF comparison.",
+            stacklevel=2,
+        )
+        return {"error": str(exc), "main_case": main_case_key, "cases": {}}
     metrics = _compute_alignment_metrics(
         direction_mode=direction,
         patch_size=main_patch_size,
