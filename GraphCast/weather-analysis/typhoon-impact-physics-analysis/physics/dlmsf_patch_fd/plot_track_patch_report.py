@@ -367,11 +367,16 @@ def plot_track_patch_sign_map(
     report_or_path, output_path: str | Path, dpi: int = 200
 ) -> Path | None:
     report = _load_report(report_or_path)
+
+    def _has_sign_map(c: dict) -> bool:
+        viz = c.get("visualization")
+        return isinstance(viz, dict) and isinstance(viz.get("sign_map"), dict)
+
     wind_case_key = str(report.get("wind_case", ""))
     main_case = str(report.get("main_case", ""))
     _preferred = wind_case_key if wind_case_key else main_case
     case = report.get("cases", {}).get(_preferred, {})
-    if not isinstance(case.get("visualization"), dict):
+    if not _has_sign_map(case):
         case = report.get("cases", {}).get(main_case, {})
     viz = case.get("visualization")
     if not isinstance(viz, dict):

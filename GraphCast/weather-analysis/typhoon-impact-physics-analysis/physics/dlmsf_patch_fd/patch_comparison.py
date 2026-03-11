@@ -1846,7 +1846,7 @@ def run_track_patch_analysis(
     summary = {
         "source_pipeline": "swe",
         "main_case": main_case_key,
-        "wind_case": wind_along_key,
+        "wind_case": wind_along_key if wind_along_key in cases else None,
         "window_size": window_size,
         "core_size": core_size,
         "stride": stride,
@@ -1857,7 +1857,7 @@ def run_track_patch_analysis(
     }
     return {
         "main_case": main_case_key,
-        "wind_case": wind_along_key,
+        "wind_case": wind_along_key if wind_along_key in cases else None,
         "window": window,
         "cases": cases,
         "summary": summary,
