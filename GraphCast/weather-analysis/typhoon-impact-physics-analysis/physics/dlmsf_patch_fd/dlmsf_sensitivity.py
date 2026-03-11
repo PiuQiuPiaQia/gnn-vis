@@ -174,10 +174,11 @@ def _extract_uv_levels(
         u_da = u_da.isel(batch=0)
         v_da = v_da.isel(batch=0)
     if "time" in u_da.dims:
-        if u_da.sizes["time"] < 2:
+        n = u_da.sizes["time"]
+        if n <= time_idx:
             raise ValueError(
-                f"{_U_VAR} 'time' dimension has {u_da.sizes['time']} slice(s); "
-                "DLMSF requires at least 2 time slices (uses time[1])."
+                f"{_U_VAR} 'time' dimension has {n} slice(s); "
+                f"cannot select time_idx={time_idx} (requires at least {time_idx + 1} time slices, got {n})."
             )
         u_da = u_da.isel(time=time_idx)
         v_da = v_da.isel(time=time_idx)
@@ -240,13 +241,13 @@ def compute_dlmsf_patch_fd(
         eval_inputs,
         window.lat_vals,
         window.lon_vals,
-        time_idx=1,
+        time_idx=target_time_idx,
     )
     u_bg, v_bg, bg_levels = _extract_uv_levels(
         baseline_inputs,
         window.lat_vals,
         window.lon_vals,
-        time_idx=1,
+        time_idx=target_time_idx,
     )
     if not np.array_equal(levels, bg_levels):
         raise ValueError("baseline_inputs and eval_inputs have inconsistent pressure levels for DLMSF")

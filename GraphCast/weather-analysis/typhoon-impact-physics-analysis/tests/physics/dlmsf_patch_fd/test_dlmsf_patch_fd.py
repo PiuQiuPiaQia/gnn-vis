@@ -150,3 +150,70 @@ class TestDlmsfPatchAblation:
 
         finite_abs = result.S_abs_map[np.isfinite(result.S_abs_map)]
         assert np.all(finite_abs >= 0.0)
+
+
+class TestDlmsfTimeIdxPropagation:
+    """time_idx 必须被传播到 _extract_uv_levels，不能写死成 1。
+
+    Note: This only tests propagation via compute_dlmsf_patch_fd().
+    The env_mask and E1 call sites in patch_comparison.py are not directly
+    tested due to requiring full AnalysisContext infrastructure.
+    """
+
+    def test_different_target_time_idx_gives_different_j_phys(self):
+        """用 t=0 和 t=1 放不同风速，确认 J_phys_baseline 不同。"""
+        lev = np.asarray([925, 500, 300], dtype=np.float32)
+        lat = np.linspace(-5, 5, 11)
+        lon = np.linspace(115, 125, 11)
+        # t=0: u=2, t=1: u=8
+        u_data = np.zeros((1, 2, 3, 11, 11), dtype=np.float32)
+        v_data = np.zeros((1, 2, 3, 11, 11), dtype=np.float32)
+        u_data[:, 0, :, :, :] = 2.0
+        u_data[:, 1, :, :, :] = 8.0
+        ds = xr.Dataset(
+            {
+                "u_component_of_wind": xr.DataArray(
+                    u_data, dims=("batch", "time", "level", "lat", "lon"),
+                    coords={"level": lev, "lat": lat, "lon": lon},
+                ),
+                "v_component_of_wind": xr.DataArray(
+                    v_data, dims=("batch", "time", "level", "lat", "lon"),
+                    coords={"level": lev, "lat": lat, "lon": lon},
+                ),
+            }
+        )
+        baseline = xr.Dataset(
+            {
+                "u_component_of_wind": xr.DataArray(
+                    np.zeros_like(u_data), dims=("batch", "time", "level", "lat", "lon"),
+                    coords={"level": lev, "lat": lat, "lon": lon},
+                ),
+                "v_component_of_wind": xr.DataArray(
+                    np.zeros_like(v_data), dims=("batch", "time", "level", "lat", "lon"),
+                    coords={"level": lev, "lat": lat, "lon": lon},
+                ),
+            }
+        )
+        window = build_centered_window(lat, lon, center_lat=0.0, center_lon=120.0,
+                                       window_size=11, core_size=3)
+
+        result0 = compute_dlmsf_patch_fd(
+            eval_inputs=ds, baseline_inputs=baseline, window=window,
+            center_lat=0.0, center_lon=120.0, d_hat=(1.0, 0.0),
+            target_time_idx=0, patch_size=3, stride=2,
+        )
+        result1 = compute_dlmsf_patch_fd(
+            eval_inputs=ds, baseline_inputs=baseline, window=window,
+            center_lat=0.0, center_lon=120.0, d_hat=(1.0, 0.0),
+            target_time_idx=1, patch_size=3, stride=2,
+        )
+
+        assert np.isfinite(result0.J_phys_baseline), (
+            f"result0.J_phys_baseline should be finite, got {result0.J_phys_baseline}"
+        )
+        assert np.isfinite(result1.J_phys_baseline), (
+            f"result1.J_phys_baseline should be finite, got {result1.J_phys_baseline}"
+        )
+        assert result0.J_phys_baseline != result1.J_phys_baseline, (
+            "J_phys_baseline 应随 target_time_idx 变化；若相同说明 time_idx 仍被写死"
+        )

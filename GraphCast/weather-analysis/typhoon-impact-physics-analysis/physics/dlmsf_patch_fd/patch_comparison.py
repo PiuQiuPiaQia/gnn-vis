@@ -1291,7 +1291,8 @@ def run_track_patch_analysis(
     if "u_component_of_wind" in context.eval_inputs and "v_component_of_wind" in context.eval_inputs:
         try:
             _uv_for_mask, _vv_for_mask, _ = _extract_uv_levels(
-                context.eval_inputs, window.lat_vals, window.lon_vals
+                context.eval_inputs, window.lat_vals, window.lon_vals,
+                time_idx=runtime_cfg.target_time_idx,
             )
         except Exception:
             pass
@@ -1313,10 +1314,12 @@ def run_track_patch_analysis(
     if "u_component_of_wind" in context.eval_inputs and "v_component_of_wind" in context.eval_inputs:
         try:
             u_eval, v_eval, levels_eval = _extract_uv_levels(
-                context.eval_inputs, window.lat_vals, window.lon_vals
+                context.eval_inputs, window.lat_vals, window.lon_vals,
+                time_idx=runtime_cfg.target_time_idx,
             )
             u_base, v_base, _ = _extract_uv_levels(
-                baseline_inputs, window.lat_vals, window.lon_vals
+                baseline_inputs, window.lat_vals, window.lon_vals,
+                time_idx=runtime_cfg.target_time_idx,
             )
             axis_u_e1 = float(track_ref.along_hat[0])
             axis_v_e1 = float(track_ref.along_hat[1])
