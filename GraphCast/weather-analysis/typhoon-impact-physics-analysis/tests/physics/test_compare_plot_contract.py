@@ -33,7 +33,6 @@ class ComparePlotContractTest(unittest.TestCase):
 
     def test_dlmsf_supplemental_only_path_keeps_topk_artifacts_but_skips_scatter(self):
         dlmsf_result = SimpleNamespace(
-            S_map=np.ones((2, 2), dtype=np.float64),
             S_abs_map=np.ones((2, 2), dtype=np.float64),
         )
 

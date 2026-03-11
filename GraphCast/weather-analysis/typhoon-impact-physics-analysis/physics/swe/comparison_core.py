@@ -413,20 +413,7 @@ def _build_dlmsf_alignment_inputs(
     signed_gnn_maps: Dict[str, np.ndarray],
     magnitude_gnn_maps: Dict[str, np.ndarray],
 ) -> Dict[str, Any]:
-    main_specs: List[Dict[str, Any]] = []
     warnings: List[str] = []
-
-    if "z_500" in signed_gnn_maps:
-        main_specs.append(
-            {
-                "group_name": "dlmsf_z_500",
-                "gnn_key": "z_500",
-                "s_map": dlmsf_result.S_map,
-                "gnn_map": signed_gnn_maps["z_500"],
-                "xlabel": "DLMSF $S$",
-                "ylabel": "GNN IG (signed z₅₀₀)",
-            }
-        )
 
     if "uv_500" in magnitude_gnn_maps and "uv_500" not in signed_gnn_maps:
         warnings.append(
@@ -442,11 +429,8 @@ def _build_dlmsf_alignment_inputs(
         overlap_pairs.append(("uv", dlmsf_result.S_abs_map, "uv_500"))
 
     return {
-        "main_specs": main_specs,
-        "scatter_pairs": [
-            (spec["group_name"], spec["s_map"], spec["gnn_key"], spec["xlabel"], spec["ylabel"])
-            for spec in main_specs
-        ],
+        "main_specs": [],
+        "scatter_pairs": [],
         "overlap_pairs": overlap_pairs,
         "warnings": warnings,
     }

@@ -32,12 +32,11 @@ class TestDlmsfAlignmentReportStructure:
     """验证 DLMSF 对齐报告包含正确的 group 名称和字段。"""
 
     def test_dlmsf_main_report_only_builds_signed_z_group(self):
-        """主报告只保留 signed z_500；uv_500 不应伪造为主报告分组。"""
+        """DLMSF 仅保留 overlap 输入；uv_500 不应伪造为主报告分组。"""
         from types import SimpleNamespace
         from physics.swe.comparison_core import _build_dlmsf_alignment_inputs
 
         dlmsf_result = SimpleNamespace(
-            S_map=np.random.rand(10, 10),
             S_abs_map=np.random.rand(10, 10),
         )
         signed_gnn_maps = {"z_500": np.random.rand(10, 10)}
@@ -47,18 +46,8 @@ class TestDlmsfAlignmentReportStructure:
         }
 
         inputs = _build_dlmsf_alignment_inputs(dlmsf_result, signed_gnn_maps, magnitude_gnn_maps)
-        report = AlignmentReport(
-            target_time_idx=0, lead_time_h=6,
-            patch_radius=2, patch_score_agg="mean", sigma_deg=0.0
-        )
-        for spec in inputs["main_specs"]:
-            m = _group_metrics(
-                spec["s_map"], spec["gnn_map"], spec["group_name"], 2, "mean", (20, 50)
-            )
-            report.groups.append(m)
-
-        group_names = [g.group_name for g in report.groups]
-        assert group_names == ["dlmsf_z_500"]
+        assert inputs["main_specs"] == []
+        assert inputs["scatter_pairs"] == []
         assert [pair[2] for pair in inputs["overlap_pairs"]] == ["z_500", "uv_500"]
 
     def test_dlmsf_report_json_serializable(self):
@@ -574,7 +563,6 @@ class TestDlmsfAlignmentInputBuilder:
         from physics.swe.comparison_core import _build_dlmsf_alignment_inputs
 
         dlmsf_result = SimpleNamespace(
-            S_map=np.array([[-2.0, 1.0], [0.5, -0.25]]),
             S_abs_map=np.array([[2.0, 1.0], [0.5, 0.25]]),
         )
         signed_gnn_maps = {"z_500": np.array([[-3.0, 2.0], [4.0, -5.0]])}
@@ -585,9 +573,8 @@ class TestDlmsfAlignmentInputBuilder:
 
         inputs = _build_dlmsf_alignment_inputs(dlmsf_result, signed_gnn_maps, magnitude_gnn_maps)
 
-        assert [spec["gnn_key"] for spec in inputs["main_specs"]] == ["z_500"]
-        assert inputs["main_specs"][0]["s_map"] is dlmsf_result.S_map
-        assert inputs["main_specs"][0]["gnn_map"] is signed_gnn_maps["z_500"]
+        assert inputs["main_specs"] == []
+        assert inputs["scatter_pairs"] == []
         assert [pair[2] for pair in inputs["overlap_pairs"]] == ["z_500", "uv_500"]
         assert inputs["overlap_pairs"][0][1] is dlmsf_result.S_abs_map
         assert inputs["overlap_pairs"][1][1] is dlmsf_result.S_abs_map
@@ -597,7 +584,6 @@ class TestDlmsfAlignmentInputBuilder:
         from physics.swe.comparison_core import _build_dlmsf_alignment_inputs
 
         dlmsf_result = SimpleNamespace(
-            S_map=np.ones((2, 2)),
             S_abs_map=np.ones((2, 2)),
         )
         signed_gnn_maps = {"z_500": np.ones((2, 2))}
@@ -608,5 +594,5 @@ class TestDlmsfAlignmentInputBuilder:
 
         inputs = _build_dlmsf_alignment_inputs(dlmsf_result, signed_gnn_maps, magnitude_gnn_maps)
 
-        assert all(spec["gnn_key"] != "uv_500" for spec in inputs["main_specs"])
+        assert inputs["main_specs"] == []
         assert any("uv_500" in msg for msg in inputs["warnings"])

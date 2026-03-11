@@ -290,11 +290,11 @@ def plot_topk_overlap_maps(
     lat_asc = lat[0] < lat[-1]
     origin = "lower" if lat_asc else "upper"
 
-    for group_tag, S_map, gnn_key in pairs:
+    for group_tag, score_map, gnn_key in pairs:
         if gnn_key not in gnn_ig_maps:
             continue
         # Use magnitude preprocessing for top-k overlap detection
-        swe_arr = _patch_magnitude(S_map, patch_radius, patch_score_agg)
+        swe_arr = _patch_magnitude(score_map, patch_radius, patch_score_agg)
         gnn_arr = _patch_magnitude(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
         overlap_code, actual_k = _topk_overlap_code(swe_arr, gnn_arr, topk_overlap_k)
         fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
@@ -402,13 +402,13 @@ def plot_alignment_scatter(
 
     fig, axes = plt.subplots(1, len(pairs), figsize=(5 * len(pairs), 5), dpi=dpi)
     axes_list = np.atleast_1d(axes)
-    for ax, (gname, S_map, gnn_key, xlabel, ylabel) in zip(axes_list, pairs):
+    for ax, (gname, score_map, gnn_key, xlabel, ylabel) in zip(axes_list, pairs):
         if gnn_key not in gnn_ig_maps:
             ax.text(0.5, 0.5, "N/A", ha="center", va="center", transform=ax.transAxes)
             ax.set_title(gname)
             continue
 
-        s = _patch_signed(S_map, patch_radius, patch_score_agg)
+        s = _patch_signed(score_map, patch_radius, patch_score_agg)
         g = _patch_signed(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
         a, b = _safe_finite_pair(s, g)
         if len(a) < 3:
@@ -460,12 +460,12 @@ def plot_topk_iou_curves(
     colors = ["royalblue", "tomato", "mediumseagreen", "darkorange"]
 
     fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi)
-    for i, (gname, S_map, gnn_key) in enumerate(pairs):
+    for i, (gname, score_map, gnn_key) in enumerate(pairs):
         if gnn_key not in gnn_ig_maps:
             continue
         color = colors[i % len(colors)]
         iou_vals = [
-            compute_topk_iou(S_map, gnn_ig_maps[gnn_key], (k,), patch_radius, patch_score_agg)[k]
+            compute_topk_iou(score_map, gnn_ig_maps[gnn_key], (k,), patch_radius, patch_score_agg)[k]
             for k in k_values
         ]
         ax.plot(k_values, iou_vals, marker=".", label=gname, color=color, linewidth=2)

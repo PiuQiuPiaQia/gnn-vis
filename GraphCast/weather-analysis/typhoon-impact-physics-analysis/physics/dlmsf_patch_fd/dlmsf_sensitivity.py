@@ -13,9 +13,7 @@ from shared.patch_geometry import CenteredWindow, build_sliding_patches, patch_s
 
 @dataclass
 class DLMSFSensitivityResult:
-    S_map: np.ndarray
     S_abs_map: np.ndarray
-    S_mag_map: np.ndarray
     lat_vals: np.ndarray
     lon_vals: np.ndarray
     center_lat: float
@@ -28,8 +26,6 @@ class DLMSFSensitivityResult:
     V_dlmsf: float
     n_patches: int
     patch_parallel_scores: np.ndarray
-    patch_magnitude_scores: np.ndarray
-    patch_vectors: np.ndarray
     elapsed_sec: float
 
 
@@ -224,9 +220,7 @@ def compute_dlmsf_patch_fd(
         zeros = np.zeros(window.shape, dtype=np.float64)
         patch_zeros = np.zeros(len(patches), dtype=np.float64)
         return DLMSFSensitivityResult(
-            S_map=zeros,
             S_abs_map=np.abs(zeros),
-            S_mag_map=np.abs(zeros),
             lat_vals=window.lat_vals,
             lon_vals=window.lon_vals,
             center_lat=center_lat,
@@ -239,8 +233,6 @@ def compute_dlmsf_patch_fd(
             V_dlmsf=0.0,
             n_patches=len(patches),
             patch_parallel_scores=patch_zeros,
-            patch_magnitude_scores=patch_zeros.copy(),
-            patch_vectors=np.zeros((len(patches), 2), dtype=np.float64),
             elapsed_sec=time.perf_counter() - t0,
         )
 
@@ -275,9 +267,7 @@ def compute_dlmsf_patch_fd(
     )
     J_full = float(U_full) * float(axis_u) + float(V_full) * float(axis_v)
 
-    patch_vectors = np.zeros((len(patches), 2), dtype=np.float64)
     patch_parallel = np.zeros(len(patches), dtype=np.float64)
-    patch_magnitude = np.zeros(len(patches), dtype=np.float64)
 
     for idx, patch in enumerate(patches):
         u_masked = np.array(u_full, copy=True)
@@ -303,25 +293,9 @@ def compute_dlmsf_patch_fd(
 
         delta_u = float(U_full) - float(U_minus)
         delta_v = float(V_full) - float(V_minus)
-        patch_vectors[idx, 0] = delta_u
-        patch_vectors[idx, 1] = delta_v
         patch_parallel[idx] = delta_u * float(axis_u) + delta_v * float(axis_v)
-        patch_magnitude[idx] = float(np.hypot(delta_u, delta_v))
-
-    S_map = patch_scores_to_grid(
-        patch_parallel,
-        patches,
-        window.shape,
-        core_mask=window.core_mask,
-    )
     S_abs_map = patch_scores_to_grid(
         np.abs(patch_parallel),
-        patches,
-        window.shape,
-        core_mask=window.core_mask,
-    )
-    S_mag_map = patch_scores_to_grid(
-        patch_magnitude,
         patches,
         window.shape,
         core_mask=window.core_mask,
@@ -334,9 +308,7 @@ def compute_dlmsf_patch_fd(
         f"V_full=({U_full:+.2f}, {V_full:+.2f})  J={J_full:+.4f}"
     )
     return DLMSFSensitivityResult(
-        S_map=S_map,
         S_abs_map=S_abs_map,
-        S_mag_map=S_mag_map,
         lat_vals=window.lat_vals,
         lon_vals=window.lon_vals,
         center_lat=center_lat,
@@ -349,7 +321,5 @@ def compute_dlmsf_patch_fd(
         V_dlmsf=float(V_full),
         n_patches=len(patches),
         patch_parallel_scores=patch_parallel,
-        patch_magnitude_scores=patch_magnitude,
-        patch_vectors=patch_vectors,
         elapsed_sec=elapsed,
     )

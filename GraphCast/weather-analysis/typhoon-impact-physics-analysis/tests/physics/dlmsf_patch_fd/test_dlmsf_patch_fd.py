@@ -74,12 +74,8 @@ class TestDlmsfPatchAblation:
         )
 
         assert isinstance(result, DLMSFSensitivityResult)
-        assert result.S_map.shape == window.shape
         assert result.S_abs_map.shape == window.shape
-        assert result.S_mag_map.shape == window.shape
-        assert result.patch_vectors.shape == (result.n_patches, 2)
         assert result.patch_parallel_scores.shape == (result.n_patches,)
-        assert result.patch_magnitude_scores.shape == (result.n_patches,)
         assert result.axis_name == "along"
         assert result.n_patches == 81
 
@@ -100,11 +96,8 @@ class TestDlmsfPatchAblation:
             stride=2,
         )
 
-        assert np.all(result.S_map == 0.0)
         assert np.all(result.S_abs_map == 0.0)
-        assert np.all(result.S_mag_map == 0.0)
         assert np.all(result.patch_parallel_scores == 0.0)
-        assert np.all(result.patch_magnitude_scores == 0.0)
 
     def test_background_replacement_scales_with_patch_cell_count(self):
         ds = _make_eval_inputs(u_val=5.0, v_val=3.0)
@@ -137,15 +130,8 @@ class TestDlmsfPatchAblation:
             dtype=np.float64,
         )
         np.testing.assert_allclose(result.patch_parallel_scores, expected, rtol=1e-6)
-        np.testing.assert_allclose(result.patch_vectors[:, 0], expected, rtol=1e-6)
-        np.testing.assert_allclose(
-            result.patch_vectors[:, 1],
-            np.array([(3.0 * patch.n_cells) / total_cells for patch in patches], dtype=np.float64),
-            rtol=1e-6,
-        )
-        assert np.all(result.patch_magnitude_scores >= result.patch_parallel_scores)
 
-    def test_overlap_maps_are_nonnegative_for_abs_and_magnitude(self):
+    def test_overlap_abs_map_is_nonnegative(self):
         ds = _make_eval_inputs()
         baseline = _make_eval_inputs(u_val=0.0, v_val=0.0)
         window = _make_window(ds)
@@ -163,6 +149,4 @@ class TestDlmsfPatchAblation:
         )
 
         finite_abs = result.S_abs_map[np.isfinite(result.S_abs_map)]
-        finite_mag = result.S_mag_map[np.isfinite(result.S_mag_map)]
         assert np.all(finite_abs >= 0.0)
-        assert np.all(finite_mag >= 0.0)
