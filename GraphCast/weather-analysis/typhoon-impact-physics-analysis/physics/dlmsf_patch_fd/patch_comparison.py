@@ -234,10 +234,8 @@ def _build_case_visualization_payload(
     topq_fraction: float,
     ig_abs_map: np.ndarray,
     ig_abs_scores: np.ndarray,
-    ig_signed_scores: np.ndarray,
     dlmsf_abs_map: np.ndarray,
     dlmsf_abs_scores: np.ndarray,
-    dlmsf_signed_scores: np.ndarray,
 ) -> Dict[str, Any]:
     """Build the four-figure visualization payload for a single track-patch case.
 
@@ -247,13 +245,10 @@ def _build_case_visualization_payload(
         meta        - metadata used for output filenames
         overlap     - |IG|/|DLMSF| heat maps, Top-q overlap mask, Spearman rho, IoU@q
         scatter     - patch-level abs score arrays (x=DLMSF, y=IG) + Spearman rho
-        sign_map    - discrete sign-class grid (0 non-overlap, 1 same+, 2 same-, 3 opp)
         deletion    - None by default; wired in by run_track_patch_analysis
     """
     ig_abs = np.asarray(ig_abs_scores, dtype=np.float64)
-    ig_signed = np.asarray(ig_signed_scores, dtype=np.float64)
     dlmsf_abs = np.asarray(dlmsf_abs_scores, dtype=np.float64)
-    dlmsf_signed = np.asarray(dlmsf_signed_scores, dtype=np.float64)
 
     # Compute metrics from patch-level arrays
     iou_at_20, actual_k, ig_top_idx, dlmsf_top_idx = _topq_iou(ig_abs, dlmsf_abs, topq_fraction)
@@ -266,37 +261,6 @@ def _build_case_visualization_payload(
     overlap_mask = np.zeros(window.shape, dtype=bool)
     for i in overlap_patch_idx:
         overlap_mask |= np.asarray(patches[i].mask, dtype=bool)
-
-    # Build sign_class_map: 0=non-overlap, 1=same+, 2=same-, 3=opposite
-    # Each cell is assigned the class of the overlap patch with the highest
-    # combined strength (|ig| + |dlmsf|) covering that cell.
-    sign_class_map = np.zeros(window.shape, dtype=np.int64)
-    cell_strength = np.full(window.shape, -np.inf, dtype=np.float64)
-
-    same_sign_count = 0
-    for patch_idx in overlap_patch_idx:
-        ig_score = float(ig_signed[patch_idx])
-        dlmsf_score = float(dlmsf_signed[patch_idx])
-        if np.isfinite(ig_score) and np.isfinite(dlmsf_score) and ig_score > 0.0 and dlmsf_score > 0.0:
-            sign_class = 1
-        elif np.isfinite(ig_score) and np.isfinite(dlmsf_score) and ig_score < 0.0 and dlmsf_score < 0.0:
-            sign_class = 2
-        else:
-            sign_class = 3
-        if sign_class in (1, 2):
-            same_sign_count += 1
-        strength = float(ig_abs[patch_idx]) + float(dlmsf_abs[patch_idx])
-        mask = np.asarray(patches[patch_idx].mask, dtype=bool)
-        update = mask & (strength > cell_strength)
-        sign_class_map[update] = sign_class
-        cell_strength[update] = strength
-
-    overlap_patch_count = len(overlap_patch_idx)
-    sign_agreement_at_20 = (
-        float(same_sign_count) / float(overlap_patch_count)
-        if overlap_patch_count > 0
-        else float("nan")
-    )
 
     lat_vals_list = np.asarray(window.lat_vals, dtype=np.float64).tolist()
     lon_vals_list = np.asarray(window.lon_vals, dtype=np.float64).tolist()
@@ -321,13 +285,6 @@ def _build_case_visualization_payload(
             "x_patch_abs_scores": dlmsf_abs.tolist(),
             "y_patch_abs_scores": ig_abs.tolist(),
             "spearman_rho": float(spearman_rho),
-        },
-        "sign_map": {
-            "lat_vals": lat_vals_list,
-            "lon_vals": lon_vals_list,
-            "sign_class_map": sign_class_map.tolist(),
-            "sign_agreement_at_20": sign_agreement_at_20,
-            "overlap_mask": overlap_mask.tolist(),
         },
         "deletion": None,
     }
@@ -650,64 +607,6 @@ def _compute_alignment_metrics(
         topq_fraction=float(topk_fraction),
         topq_k=topq_k,
     )
-
-
-def classify_patch_roles(
-    ig_abs_scores: np.ndarray,
-    dlmsf_abs_scores: np.ndarray,
-    k: int,
-) -> np.ndarray:
-    """Classify each patch into one of four roles based on top-k membership.
-
-    Roles:
-        0 — **neither**: not in top-k of IG or DLMSF.
-        1 — **model_only**: in top-k of IG, but not DLMSF.
-        2 — **physics_only**: in top-k of DLMSF, but not IG.
-        3 — **consensus**: in top-k of both IG and DLMSF.
-
-    NaN entries are excluded from the top-k sets and receive role 0.
-
-    Parameters
-    ----------
-    ig_abs_scores:
-        1-D array of absolute IG patch scores.
-    dlmsf_abs_scores:
-        1-D array of absolute DLMSF patch scores.
-    k:
-        Number of top patches to consider.  Capped at the number of finite
-        entries in each array.
-
-    Returns
-    -------
-    np.ndarray of dtype int, shape ``(n_patches,)``.
-    """
-    ig = np.asarray(ig_abs_scores, dtype=np.float64).ravel()
-    dlmsf = np.asarray(dlmsf_abs_scores, dtype=np.float64).ravel()
-    n = len(ig)
-
-    def _topk_set(scores: np.ndarray) -> set:
-        finite_idx = np.flatnonzero(np.isfinite(scores))
-        actual_k = min(k, len(finite_idx))
-        if actual_k == 0:
-            return set()
-        order = np.argsort(scores[finite_idx])[::-1]
-        return set(finite_idx[order[:actual_k]].tolist())
-
-    set_ig = _topk_set(ig)
-    set_dlmsf = _topk_set(dlmsf)
-
-    roles = np.zeros(n, dtype=np.int64)
-    for i in range(n):
-        in_ig = i in set_ig
-        in_dlmsf = i in set_dlmsf
-        if in_ig and in_dlmsf:
-            roles[i] = 3
-        elif in_ig:
-            roles[i] = 1
-        elif in_dlmsf:
-            roles[i] = 2
-        # else: 0 (already set)
-    return roles
 
 
 def _filter_uv_to_band(
@@ -1314,10 +1213,8 @@ def run_track_patch_analysis(
             topq_fraction=topk_fraction,
             ig_abs_map=ig_patch["abs_map"],
             ig_abs_scores=ig_patch["abs_scores"],
-            ig_signed_scores=ig_patch["signed_scores"],
             dlmsf_abs_map=dlmsf_result.S_abs_map,
             dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
-            dlmsf_signed_scores=dlmsf_result.patch_parallel_scores,
         ),
         "ig": {
             **ig_maps,

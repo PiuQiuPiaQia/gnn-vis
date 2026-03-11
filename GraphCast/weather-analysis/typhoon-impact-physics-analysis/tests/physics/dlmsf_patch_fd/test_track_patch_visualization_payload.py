@@ -63,10 +63,8 @@ def _dummy_payload_args(**overrides):
         topq_fraction=0.5,
         ig_abs_map=np.array([[1.0, 2.0, 3.0]]),
         ig_abs_scores=np.array([5.0, 4.0, 1.0]),
-        ig_signed_scores=np.array([5.0, -4.0, 1.0]),
         dlmsf_abs_map=np.array([[2.0, 3.0, 1.0]]),
         dlmsf_abs_scores=np.array([6.0, 3.0, 1.0]),
-        dlmsf_signed_scores=np.array([2.0, -1.0, -1.0]),
     )
     defaults.update(overrides)
     return defaults
@@ -80,7 +78,7 @@ class TestVisualizationPayloadStructure:
 
     def test_payload_has_required_top_level_keys(self):
         payload = _build_case_visualization_payload(**_dummy_payload_args())
-        for key in ("meta", "overlap", "scatter", "sign_map", "deletion"):
+        for key in ("meta", "overlap", "scatter", "deletion"):
             assert key in payload, f"Missing key: {key!r}"
 
     def test_deletion_is_none_by_default(self):
@@ -194,8 +192,6 @@ def _dummy_visualization_payload() -> dict:
         "overlap": {"spearman_rho": 0.7, "iou_at_20": 0.5, "ig_abs_map": [[1.0]], "dlmsf_abs_map": [[2.0]],
                      "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
         "scatter": {"x_patch_abs_scores": [1.0], "y_patch_abs_scores": [2.0], "spearman_rho": 0.7},
-        "sign_map": {"sign_class_map": [[1]], "sign_agreement_at_20": 1.0,
-                     "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
         "deletion": None,
     }
 
