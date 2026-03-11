@@ -7,10 +7,9 @@ and returns a signed lat×lon cell map for the given window.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import xarray as xr
 
-from physics.dlmsf_patch_fd.patch_comparison import _case_summary, _compute_dlmsf_env_mask, _project_wind_ig_along_track
+from physics.dlmsf_patch_fd.patch_comparison import _compute_dlmsf_env_mask, _project_wind_ig_along_track
 from shared.patch_geometry import CenteredWindow
 
 
@@ -237,36 +236,6 @@ def test_wind_ig_projection_uses_pressure_weights():
     )
 
 
-def test_wind_along_signed_case_has_multi_threshold_metrics():
-    """compute_sign_agreement and compute_topk_iou_signed work for k30 and k40."""
-    from physics.dlmsf_patch_fd.patch_comparison import compute_topk_iou_signed, compute_sign_agreement
-
-    rng = np.random.default_rng(42)
-    n = 50
-    a = rng.standard_normal(n)
-    b = rng.standard_normal(n)
-    for frac in (0.30, 0.40):
-        k = max(1, int(np.ceil(frac * n)))
-        iou_pos = compute_topk_iou_signed(a, b, k=k, sign="pos")
-        iou_neg = compute_topk_iou_signed(a, b, k=k, sign="neg")
-        sign_agr = compute_sign_agreement(a, b, k=k)
-        assert 0.0 <= iou_pos <= 1.0
-        assert 0.0 <= iou_neg <= 1.0
-        assert 0.0 <= sign_agr <= 1.0
-
-
-def test_signed_spearman_direction():
-    """Signed Spearman should be positive for positively correlated signed scores."""
-    import scipy.stats
-
-    a = np.array([1.0, -2.0, 3.0, -4.0, 5.0])
-    b = np.array([0.5, -1.0, 2.0, -3.0, 4.0])
-    a_rank = scipy.stats.rankdata(a)
-    b_rank = scipy.stats.rankdata(b)
-    rho = np.corrcoef(a_rank, b_rank)[0, 1]
-    assert rho > 0.9
-
-
 def test_annulus_mask_zeroes_core_in_wind_ig():
     """Multiplying wind_signed_cell_map by env_mask must zero core cells."""
     import xarray
@@ -295,30 +264,3 @@ def test_annulus_mask_zeroes_core_in_wind_ig():
     masked = cell_map * env_mask.astype(np.float64)
     assert masked[W // 2, W // 2] == 0.0, "Core cell must be zero"
     assert masked.sum() > 0.0, "Some annulus cells must be non-zero"
-
-
-def test_wind_along_signed_case_has_visualization_key():
-    """_case_summary must preserve visualization key from wind_along_signed case."""
-    case = {
-        "direction": "along", "patch_size": 3, "window_size": 7,
-        "core_size": 1, "stride": 2,
-        "sign_agreement_at_20": 0.5, "iou_pos_at_20": 0.3, "iou_neg_at_20": 0.2,
-        "iou_pos_at_30": 0.35, "iou_neg_at_30": 0.25,
-        "iou_pos_at_40": 0.4, "iou_neg_at_40": 0.28,
-        "sign_agreement_at_30": 0.55, "sign_agreement_at_40": 0.6,
-        "signed_spearman": 0.45, "levels_bottom_hpa": 925.0, "levels_top_hpa": 300.0,
-        "visualization": {
-            "meta": {"direction": "along", "patch_size": 3, "target_time_idx": 1,
-                     "topq_fraction": 0.2, "source": "wind_along_signed"},
-            "sign_map": {"lat_vals": [20.0], "lon_vals": [120.0],
-                         "sign_class_map": [[1]], "overlap_mask": [[False]],
-                         "sign_agreement_at_20": 0.5},
-            "scatter": {"x_patch_abs_scores": [0.1], "y_patch_abs_scores": [0.15],
-                        "spearman_rho": 0.45},
-        },
-    }
-    summary = _case_summary(case)
-    assert "visualization" in summary
-    assert summary["visualization"]["meta"]["source"] == "wind_along_signed"
-    assert "sign_map" in summary["visualization"]
-    assert "scatter" in summary["visualization"]

@@ -106,107 +106,6 @@ def _topq_iou(
     return float(len(set_a & set_b) / float(union)), actual_k, idx_a, idx_b
 
 
-def compute_topk_iou_signed(
-    a: np.ndarray,
-    b: np.ndarray,
-    k: int,
-    sign: str,
-) -> float:
-    """IoU of top-k signed patches between two score arrays.
-
-    Parameters
-    ----------
-    a, b:
-        1-D arrays of patch scores (may contain NaN).
-    k:
-        Number of top entries to consider (by magnitude within the chosen sign).
-    sign:
-        ``"pos"`` selects the top-k largest positive values;
-        ``"neg"`` selects the top-k most-negative (smallest) values.
-
-    Returns
-    -------
-    float
-        IoU in [0, 1].  Returns 0.0 when neither array has any entry with the
-        requested sign.
-    """
-    if sign not in ("pos", "neg"):
-        raise ValueError("sign must be 'pos' or 'neg'")
-
-    a = np.asarray(a, dtype=np.float64).ravel()
-    b = np.asarray(b, dtype=np.float64).ravel()
-
-    finite = np.isfinite(a) & np.isfinite(b)
-
-    if sign == "pos":
-        mask_a = finite & (a > 0)
-        mask_b = finite & (b > 0)
-        # top-k by largest value
-        def _topk_idx(arr, mask):
-            idx = np.flatnonzero(mask)
-            if idx.size == 0:
-                return set()
-            order = np.argsort(arr[idx])[::-1]
-            return set(idx[order[:k]].tolist())
-    else:  # neg
-        mask_a = finite & (a < 0)
-        mask_b = finite & (b < 0)
-        # top-k by most-negative (smallest) value
-        def _topk_idx(arr, mask):
-            idx = np.flatnonzero(mask)
-            if idx.size == 0:
-                return set()
-            order = np.argsort(arr[idx])  # ascending → most negative first
-            return set(idx[order[:k]].tolist())
-
-    set_a = _topk_idx(a, mask_a)
-    set_b = _topk_idx(b, mask_b)
-
-    if len(set_a) == 0 and len(set_b) == 0:
-        return 0.0
-
-    union = len(set_a | set_b)
-    if union == 0:
-        return 0.0
-    return float(len(set_a & set_b) / float(union))
-
-
-def compute_sign_agreement(
-    a: np.ndarray,
-    b: np.ndarray,
-    k: int,
-) -> float:
-    """Fraction of top-k (by absolute value) overlapping patches with matching sign.
-
-    Both arrays are ranked by absolute value.  The top-k sets are intersected;
-    within the intersection the fraction of indices where ``sign(a[i]) ==
-    sign(b[i])`` is returned.
-
-    Returns ``float("nan")`` when the intersection is empty (no overlap).
-    """
-    a = np.asarray(a, dtype=np.float64).ravel()
-    b = np.asarray(b, dtype=np.float64).ravel()
-
-    finite = np.isfinite(a) & np.isfinite(b)
-    finite_idx = np.flatnonzero(finite)
-
-    if finite_idx.size == 0:
-        return float("nan")
-
-    abs_a = np.abs(a[finite_idx])
-    abs_b = np.abs(b[finite_idx])
-
-    top_a = set(finite_idx[np.argsort(abs_a)[::-1][:k]].tolist())
-    top_b = set(finite_idx[np.argsort(abs_b)[::-1][:k]].tolist())
-
-    overlap = top_a & top_b
-    if len(overlap) == 0:
-        return float("nan")
-
-    agree = sum(1 for i in overlap if np.sign(a[i]) == np.sign(b[i]))
-    return float(agree) / float(len(overlap))
-
-
 def _patch_scores_from_maps(
     *,
     window: CenteredWindow,
@@ -304,23 +203,6 @@ def _build_case_plot_payload(
     }
 
 
-def _classify_patch_sign(ig_score: float, dlmsf_score: float) -> int:
-    """Classify a pair of signed patch scores for sign agreement.
-
-    Returns:
-        1  same-sign positive (both > 0)
-        2  same-sign negative (both < 0)
-        3  opposite-sign or non-finite
-    """
-    if not np.isfinite(ig_score) or not np.isfinite(dlmsf_score):
-        return 3
-    if ig_score > 0.0 and dlmsf_score > 0.0:
-        return 1
-    if ig_score < 0.0 and dlmsf_score < 0.0:
-        return 2
-    return 3
-
-
 def _build_case_visualization_payload(
     *,
     window: CenteredWindow,
@@ -372,10 +254,14 @@ def _build_case_visualization_payload(
 
     same_sign_count = 0
     for patch_idx in overlap_patch_idx:
-        sign_class = _classify_patch_sign(
-            float(ig_signed[patch_idx]),
-            float(dlmsf_signed[patch_idx]),
-        )
+        ig_score = float(ig_signed[patch_idx])
+        dlmsf_score = float(dlmsf_signed[patch_idx])
+        if np.isfinite(ig_score) and np.isfinite(dlmsf_score) and ig_score > 0.0 and dlmsf_score > 0.0:
+            sign_class = 1
+        elif np.isfinite(ig_score) and np.isfinite(dlmsf_score) and ig_score < 0.0 and dlmsf_score < 0.0:
+            sign_class = 2
+        else:
+            sign_class = 3
         if sign_class in (1, 2):
             same_sign_count += 1
         strength = float(ig_abs[patch_idx]) + float(dlmsf_abs[patch_idx])
@@ -901,82 +787,6 @@ def classify_patch_roles(
     return roles
 
 
-def compute_sign_class_grid(
-    wind_signed_scores: np.ndarray,
-    dlmsf_signed_scores: np.ndarray,
-    patches: Sequence,
-    grid_shape: Tuple[int, int],
-    k: int,
-) -> np.ndarray:
-    """Rasterize per-patch sign-agreement classes to a 2-D cell grid.
-
-    Sign class encoding (matches plot_track_patch_sign_map):
-        0 = not in top-k union
-        1 = ++ agree (both positive)
-        2 = -- agree (both negative)
-        3 = opposite signs
-
-    Uses mode voting for overlapping patches (most frequent class wins).
-    Patches NOT in the top-k union of |wind| or |dlmsf| are ignored (class 0).
-
-    Parameters
-    ----------
-    wind_signed_scores, dlmsf_signed_scores:
-        1-D signed scores for each patch.
-    patches:
-        List of patch objects with a `.mask` attribute (2-D bool array, same
-        spatial shape as `grid_shape`).
-    grid_shape:
-        (n_rows, n_cols) spatial shape.
-    k:
-        Top-k threshold. Patches in top-k of |wind| OR top-k of |dlmsf|
-        are included in the union.
-
-    Returns
-    -------
-    np.ndarray of dtype int32, shape ``grid_shape``.
-    """
-    wind = np.asarray(wind_signed_scores, dtype=np.float64).ravel()
-    dlmsf = np.asarray(dlmsf_signed_scores, dtype=np.float64).ravel()
-    n = len(wind)
-    if len(dlmsf) != n or len(patches) != n:
-        raise ValueError(
-            f"wind ({n}), dlmsf ({len(dlmsf)}), patches ({len(patches)}) must have same length"
-        )
-
-    def _topk_set(scores: np.ndarray) -> set:
-        finite = np.flatnonzero(np.isfinite(scores))
-        actual_k = min(k, len(finite))
-        if actual_k == 0:
-            return set()
-        order = np.argsort(np.abs(scores[finite]))[::-1]
-        return set(finite[order[:actual_k]].tolist())
-
-    union_set = _topk_set(wind) | _topk_set(dlmsf)
-
-    def _sign_class(w: float, d: float) -> int:
-        if not (np.isfinite(w) and np.isfinite(d)):
-            return 3
-        if w > 0 and d > 0:
-            return 1
-        if w < 0 and d < 0:
-            return 2
-        return 3
-
-    counts = np.zeros((4,) + tuple(grid_shape), dtype=np.int32)
-    for patch_idx in union_set:
-        cls = _sign_class(float(wind[patch_idx]), float(dlmsf[patch_idx]))
-        mask = np.asarray(patches[int(patch_idx)].mask, dtype=bool)
-        counts[cls][mask] += 1
-
-    # Tie-breaking: argmax returns lowest index on tie.
-    # For cells with equal votes, class priority is: 0 < 1 < 2 < 3.
-    # Class 0 = outside union is never in a tie (has 0 count for union cells).
-    # So ties among union cells (1 vs 2 vs 3) are resolved toward "++ agree".
-    grid = np.argmax(counts, axis=0).astype(np.int32)
-    return grid
-
-
 def _filter_uv_to_band(
     u_anom: np.ndarray,
     v_anom: np.ndarray,
@@ -1371,16 +1181,6 @@ def _case_summary(case: Dict[str, Any]) -> Dict[str, Any]:
         if key in case:
             summary[key] = case[key]
 
-    # E2: wind_along_signed fields
-    for key in ("sign_agreement_at_20", "sign_agreement_at_30", "sign_agreement_at_40",
-                "iou_pos_at_20", "iou_neg_at_20",
-                "iou_pos_at_30", "iou_neg_at_30",
-                "iou_pos_at_40", "iou_neg_at_40",
-                "signed_spearman",
-                "levels_bottom_hpa", "levels_top_hpa"):
-        if key in case:
-            summary[key] = case[key]
-
     return summary
 
 
@@ -1461,7 +1261,6 @@ def run_track_patch_analysis(
 
     cases: Dict[str, Any] = {}
     main_case_key = f"{direction}_p{main_patch_size}"
-    wind_along_key = f"wind_along_signed_p{main_patch_size}"
     environment_map = _extract_window_field_map(
         context.eval_inputs,
         field_name=center_field_name,
@@ -1602,15 +1401,7 @@ def run_track_patch_analysis(
         f"iou@{int(round(100.0 * metrics.topq_fraction))}%={metrics.iou_topq:.3f}"
     )
 
-    # -----------------------------------------------------------------------
-    # E2: wind-along signed IG vs signed DLMSF (925-300 hPa wind projection)
-    # -----------------------------------------------------------------------
-    wind_u_var = "u_component_of_wind"
-    wind_v_var = "v_component_of_wind"
-    levels_bottom = float(getattr(cfg_module, "DLMSF_LEVELS_BOTTOM_HPA", 925.0))
-    levels_top = float(getattr(cfg_module, "DLMSF_LEVELS_TOP_HPA", 300.0))
-    raw_ig = ig_maps.get("raw_ig_per_var", {})
-    # Precompute DLMSF annulus mask (reused by E2 and E1)
+    # Precompute DLMSF annulus mask (reused by E1)
     _e_core_radius_deg = float(getattr(cfg_module, "SWE_CORE_RADIUS_DEG", 3.0))
     _e_annulus_inner_km = float(getattr(cfg_module, "SWE_STEERING_ANNULUS_INNER_KM", 300.0))
     _e_annulus_outer_km = float(getattr(cfg_module, "SWE_STEERING_ANNULUS_OUTER_KM", 900.0))
@@ -1634,124 +1425,6 @@ def run_track_patch_analysis(
         u_levels=_uv_for_mask,
         v_levels=_vv_for_mask,
     )
-    if wind_u_var in raw_ig and wind_v_var in raw_ig:
-        wind_signed_cell_map = _project_wind_ig_along_track(
-            ig_u_full=raw_ig[wind_u_var],
-            ig_v_full=raw_ig[wind_v_var],
-            u_da=context.eval_inputs[wind_u_var],
-            v_da=context.eval_inputs[wind_v_var],
-            window=window,
-            d_hat=track_ref.along_hat,
-            levels_bottom_hpa=levels_bottom,
-            levels_top_hpa=levels_top,
-            time_idx=1,
-        )
-        wind_signed_cell_map = wind_signed_cell_map * env_mask_annulus.astype(np.float64)
-        wind_abs_cell_map = np.abs(wind_signed_cell_map)
-        wind_patch = _patch_scores_from_maps(
-            window=window,
-            patch_size=main_patch_size,
-            stride=stride,
-            signed_cell_map=wind_signed_cell_map,
-            abs_cell_map=wind_abs_cell_map,
-        )
-        dlmsf_signed = dlmsf_result.patch_parallel_scores
-        n_patches_total = len(wind_patch["patches"])
-        k20 = max(1, int(math.ceil(0.20 * n_patches_total)))
-        k30 = max(1, int(math.ceil(0.30 * n_patches_total)))
-        k40 = max(1, int(math.ceil(0.40 * n_patches_total)))
-        wind_sign_agreement_20 = compute_sign_agreement(
-            wind_patch["signed_scores"], dlmsf_signed, k=k20
-        )
-        wind_sign_agreement_30 = compute_sign_agreement(
-            wind_patch["signed_scores"], dlmsf_signed, k=k30
-        )
-        wind_sign_agreement_40 = compute_sign_agreement(
-            wind_patch["signed_scores"], dlmsf_signed, k=k40
-        )
-        wind_iou_pos_20 = compute_topk_iou_signed(
-            wind_patch["signed_scores"], dlmsf_signed, k=k20, sign="pos"
-        )
-        wind_iou_neg_20 = compute_topk_iou_signed(
-            wind_patch["signed_scores"], dlmsf_signed, k=k20, sign="neg"
-        )
-        wind_iou_pos_30 = compute_topk_iou_signed(
-            wind_patch["signed_scores"], dlmsf_signed, k=k30, sign="pos"
-        )
-        wind_iou_neg_30 = compute_topk_iou_signed(
-            wind_patch["signed_scores"], dlmsf_signed, k=k30, sign="neg"
-        )
-        wind_iou_pos_40 = compute_topk_iou_signed(
-            wind_patch["signed_scores"], dlmsf_signed, k=k40, sign="pos"
-        )
-        wind_iou_neg_40 = compute_topk_iou_signed(
-            wind_patch["signed_scores"], dlmsf_signed, k=k40, sign="neg"
-        )
-        wind_signed_spearman, _ = _safe_corr(
-            scipy.stats.spearmanr,
-            np.asarray(wind_patch["signed_scores"], dtype=np.float64),
-            np.asarray(dlmsf_signed, dtype=np.float64),
-        )
-        wind_sign_class_map = compute_sign_class_grid(
-            wind_signed_scores=np.asarray(wind_patch["signed_scores"], dtype=np.float64),
-            dlmsf_signed_scores=np.asarray(dlmsf_signed, dtype=np.float64),
-            patches=wind_patch["patches"],
-            grid_shape=window.shape,
-            k=k20,
-        )
-        cases[wind_along_key] = {
-            "direction": direction,
-            "patch_size": main_patch_size,
-            "window_size": window_size,
-            "core_size": core_size,
-            "stride": stride,
-            "window": window,
-            "wind_along_signed_cell_map": wind_signed_cell_map,
-            "wind_patch_signed_scores": wind_patch["signed_scores"],
-            "wind_patch_abs_scores": wind_patch["abs_scores"],
-            "dlmsf_signed_scores": dlmsf_signed,
-            "sign_agreement_at_20": float(wind_sign_agreement_20) if wind_sign_agreement_20 == wind_sign_agreement_20 else None,
-            "sign_agreement_at_30": float(wind_sign_agreement_30) if wind_sign_agreement_30 == wind_sign_agreement_30 else None,
-            "sign_agreement_at_40": float(wind_sign_agreement_40) if wind_sign_agreement_40 == wind_sign_agreement_40 else None,
-            "iou_pos_at_20": float(wind_iou_pos_20),
-            "iou_neg_at_20": float(wind_iou_neg_20),
-            "iou_pos_at_30": float(wind_iou_pos_30),
-            "iou_neg_at_30": float(wind_iou_neg_30),
-            "iou_pos_at_40": float(wind_iou_pos_40),
-            "iou_neg_at_40": float(wind_iou_neg_40),
-            "signed_spearman": float(wind_signed_spearman),
-            "levels_bottom_hpa": levels_bottom,
-            "levels_top_hpa": levels_top,
-            "visualization": {
-                "meta": {
-                    "direction": direction,
-                    "patch_size": main_patch_size,
-                    "target_time_idx": runtime_cfg.target_time_idx,
-                    "topq_fraction": float(topk_fraction),
-                    "source": "wind_along_signed",
-                },
-                "sign_map": {
-                    "lat_vals": window.lat_vals.tolist(),
-                    "lon_vals": window.lon_vals.tolist(),
-                    "sign_class_map": wind_sign_class_map.tolist(),
-                    "overlap_mask": (wind_sign_class_map > 0).tolist(),
-                    "sign_agreement_at_20": float(wind_sign_agreement_20) if wind_sign_agreement_20 == wind_sign_agreement_20 else None,
-                },
-                "scatter": {
-                    "x_patch_abs_scores": [float(v) for v in wind_patch["abs_scores"]],
-                    "y_patch_abs_scores": [float(v) for v in np.abs(dlmsf_signed)],
-                    "spearman_rho": float(wind_signed_spearman),
-                },
-            },
-        }
-        print(
-            f"[Track-Patch] {wind_along_key}: "
-            f"sign_agr@20%={wind_sign_agreement_20:.3f}  "
-            f"sign_agr@30%={wind_sign_agreement_30:.3f}  "
-            f"sign_agr@40%={wind_sign_agreement_40:.3f}  "
-            f"spearman_signed={wind_signed_spearman:+.3f}  "
-            f"iou_pos@20%={wind_iou_pos_20:.3f}  iou_neg@20%={wind_iou_neg_20:.3f}"
-        )
 
     # -----------------------------------------------------------------------
     # E1: ig_phys_vs_dlmsf_fd — analytical IG on J_along vs FD
@@ -1878,7 +1551,6 @@ def run_track_patch_analysis(
     summary = {
         "source_pipeline": "swe",
         "main_case": main_case_key,
-        "wind_case": wind_along_key if wind_along_key in cases else None,
         "window_size": window_size,
         "core_size": core_size,
         "stride": stride,
@@ -1889,7 +1561,6 @@ def run_track_patch_analysis(
     }
     return {
         "main_case": main_case_key,
-        "wind_case": wind_along_key if wind_along_key in cases else None,
         "window": window,
         "cases": cases,
         "summary": summary,

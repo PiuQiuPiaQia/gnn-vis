@@ -1,0 +1,35 @@
+{
+  "_comment": "SWE 物理敏感度与 GNN IG 对齐指标。",
+  "_field_notes": {
+    "target_time_idx": "预报时效索引。0 表示 +6h，1 表示 +12h，以此类推。",
+    "lead_time_h": "预报时效（小时）。",
+    "patch_radius": "计算指标前进行局部 patch 聚合时使用的半径。",
+    "patch_score_agg": "patch 聚合方式（如 mean）。",
+    "sigma_deg": "敏感度目标函数中高斯权重的宽度（度）。",
+    "groups": "按变量组统计的对齐指标（h 与 uv）。",
+    "spearman_rho": "Spearman 秩相关系数，越接近 1 表示排序一致性越高。",
+    "spearman_pval": "Spearman 检验 p 值，越小表示相关性越显著。",
+    "topk_iou": "Top-K 热点集合的交并比（IoU），越大表示热点重叠越高。",
+    "n_valid": "参与统计的有效样本数量（有限值网格点数）。"
+  },
+  "target_time_idx": 0,
+  "lead_time_h": 6,
+  "patch_radius": 2,
+  "patch_score_agg": "mean",
+  "sigma_deg": 3.0,
+  "groups": {
+    "h": {
+      "_comment": "SWE 敏感度图与 GNN IG 图在排序与热点重叠上的一致性。",
+      "spearman_rho": -0.045,
+      "spearman_pval": 0.0721,
+      "topk_iou": {
+        "k20": 0.4815,
+        "k50": 0.6667,
+        "k100": 0.626,
+        "k200": 0.7621
+      },
+      "_topk_iou_note": "SWE 与 GNN 两张图在 Top-K 热点上的 IoU（交并比）。",
+      "n_valid": 1600
+    }
+  }
+}

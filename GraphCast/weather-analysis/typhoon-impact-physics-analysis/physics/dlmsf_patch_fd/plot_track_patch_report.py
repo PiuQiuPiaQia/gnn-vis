@@ -108,11 +108,6 @@ def _format_deletion_annotation(
     )
 
 
-def _format_sign_map_annotation(*, sign_agreement_at_20: float) -> str:
-    """Return annotation string for the sign map figure. No Pearson."""
-    return f"Sign agreement@20%: {float(sign_agreement_at_20):.2%}"
-
-
 # ---------------------------------------------------------------------------
 # Figure 1: |IG| + |DLMSF| heatmaps + Top-q overlap binary map
 # ---------------------------------------------------------------------------
@@ -350,104 +345,6 @@ def plot_track_patch_deletion_validation(
 
 
 # ---------------------------------------------------------------------------
-# Figure 4: Sign agreement map (Top-q overlap patches)
-# ---------------------------------------------------------------------------
-
-# sign_class codes:
-#   0 = outside overlap
-#   1 = ++ (both positive, agree)
-#   2 = -- (both negative, agree)
-#   3 = opposite or non-finite (disagree)
-
-_SIGN_CMAP = ListedColormap(["#f0f0f0", "#27ae60", "#2980b9", "#c0392b"])
-_SIGN_NORM = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], _SIGN_CMAP.N)
-
-
-def plot_track_patch_sign_map(
-    report_or_path, output_path: str | Path, dpi: int = 200
-) -> Path | None:
-    report = _load_report(report_or_path)
-
-    def _has_sign_map(c: dict) -> bool:
-        viz = c.get("visualization")
-        return isinstance(viz, dict) and isinstance(viz.get("sign_map"), dict)
-
-    wind_case_key = str(report.get("wind_case", ""))
-    main_case = str(report.get("main_case", ""))
-    _preferred = wind_case_key if wind_case_key else main_case
-    case = report.get("cases", {}).get(_preferred, {})
-    if not _has_sign_map(case):
-        case = report.get("cases", {}).get(main_case, {})
-    viz = case.get("visualization")
-    if not isinstance(viz, dict):
-        return None
-    sign_map_data = viz.get("sign_map")
-    if not isinstance(sign_map_data, dict):
-        return None
-
-    lat_vals = _as_float_array(sign_map_data["lat_vals"], ndim=1)
-    lon_vals = _as_float_array(sign_map_data["lon_vals"], ndim=1)
-    sign_class_map = np.asarray(sign_map_data["sign_class_map"], dtype=np.int32)
-    sign_agreement_at_20 = float(sign_map_data.get("sign_agreement_at_20", float("nan")))
-
-    meta = viz.get("meta", {})
-    topq_pct = int(round(float(meta.get("topq_fraction", 0.2)) * 100))
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    sign_field, plot_lat = _prep_lat_oriented_field(
-        sign_class_map.astype(np.float64), lat_vals
-    )
-    extent = [
-        float(np.min(lon_vals)),
-        float(np.max(lon_vals)),
-        float(np.min(plot_lat)),
-        float(np.max(plot_lat)),
-    ]
-
-    fig, ax = plt.subplots(figsize=(7, 5), dpi=dpi, constrained_layout=True)
-    ax.imshow(
-        sign_field,
-        origin="lower",
-        extent=extent,
-        aspect="auto",
-        cmap=_SIGN_CMAP,
-        norm=_SIGN_NORM,
-    )
-    ax.set_title(f"Sign Agreement Map (Top-{topq_pct}% Overlap)")
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    ax.legend(
-        handles=[
-            mpatches.Patch(facecolor="#f0f0f0", edgecolor="#aaaaaa", label="Outside overlap"),
-            mpatches.Patch(facecolor="#27ae60", edgecolor="none", label="++ agree"),
-            mpatches.Patch(facecolor="#2980b9", edgecolor="none", label="-- agree"),
-            mpatches.Patch(facecolor="#c0392b", edgecolor="none", label="Opposite / invalid"),
-        ],
-        loc="lower left",
-        frameon=False,
-        fontsize=8,
-    )
-
-    annotation = _format_sign_map_annotation(sign_agreement_at_20=sign_agreement_at_20)
-    ax.text(
-        0.98,
-        0.98,
-        annotation,
-        transform=ax.transAxes,
-        ha="right",
-        va="top",
-        fontsize=9,
-        bbox={"facecolor": "white", "edgecolor": "#444444", "alpha": 0.9, "boxstyle": "round,pad=0.3"},
-    )
-
-    fig.savefig(output_path, bbox_inches="tight")
-    plt.close(fig)
-    return output_path
-
-
-# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -459,7 +356,7 @@ def write_track_patch_figures(
     prefix: str = "dlmsf_track_patch",
     dpi: int = 200,
 ) -> List[Path]:
-    """Write the four fixed DLMSF validation figures.
+    """Write the fixed DLMSF validation figures.
 
     The ``prefix`` argument is kept for call-site compatibility but is
     intentionally ignored — filenames are derived from visualization metadata.
@@ -488,8 +385,6 @@ def write_track_patch_figures(
     p1 = output_dir / f"dlmsf_{direction}_overlap_q{topq_pct}_t{target_time_idx}.png"
     p2 = output_dir / f"dlmsf_{direction}_scatter_t{target_time_idx}.png"
     p3 = output_dir / f"deletion_validation_{direction}_p{patch_size}.png"
-    p4 = output_dir / f"dlmsf_{direction}_sign_map_t{target_time_idx}.png"
-
     outputs: List[Path] = []
 
     result = plot_track_patch_overlap_q20(report, p1, dpi=dpi)
@@ -501,10 +396,6 @@ def write_track_patch_figures(
         outputs.append(result)
 
     result = plot_track_patch_deletion_validation(report, p3, dpi=dpi)
-    if result is not None:
-        outputs.append(result)
-
-    result = plot_track_patch_sign_map(report, p4, dpi=dpi)
     if result is not None:
         outputs.append(result)
 

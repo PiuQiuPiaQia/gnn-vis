@@ -53,17 +53,7 @@ SHAPE = (1, 3)
 
 
 def _dummy_payload_args(**overrides):
-    """
-    Default setup: 3 patches, shape (1, 3), topq_fraction=0.5.
-    k = ceil(0.5 * 3) = 2
-    IG top-2 (by abs):   patch 0 (5.0), patch 1 (4.0)
-    DLMSF top-2 (by abs): patch 0 (6.0), patch 1 (3.0)
-    Overlap: {0, 1}
-
-    Patch 0: ig_signed=+5, dlmsf_signed=+2  -> same-sign positive  (class 1)
-    Patch 1: ig_signed=-4, dlmsf_signed=-1  -> same-sign negative   (class 2)
-    sign_agreement = 2/2 = 1.0
-    """
+    """Default payload args for overlap/scatter payload validation."""
     defaults = dict(
         window=_make_window(SHAPE),
         patches=_make_patches(SHAPE),
@@ -180,97 +170,6 @@ class TestVisualizationScatter:
 
 
 # ---------------------------------------------------------------------------
-# Tests: sign_map section — sign_agreement_at_20
-# ---------------------------------------------------------------------------
-
-class TestSignAgreement:
-
-    def test_sign_agreement_perfect_when_all_overlap_same_sign(self):
-        # Default: both overlap patches are same-sign -> agreement = 1.0
-        payload = _build_case_visualization_payload(**_dummy_payload_args())
-        assert payload["sign_map"]["sign_agreement_at_20"] == pytest.approx(1.0)
-
-    def test_sign_agreement_zero_when_all_overlap_opposite_sign(self):
-        args = _dummy_payload_args(
-            ig_signed_scores=np.array([5.0, -4.0, 1.0]),
-            dlmsf_signed_scores=np.array([-2.0, 1.0, -1.0]),
-        )
-        payload = _build_case_visualization_payload(**args)
-        assert payload["sign_map"]["sign_agreement_at_20"] == pytest.approx(0.0)
-
-    def test_sign_agreement_nan_when_no_overlap(self):
-        # Force k=1: with 3 patches, fraction=0.33 -> k = max(1, ceil(0.33*3)) = max(1,1) = 1
-        # IG top-1: patch 0 (score=5), DLMSF top-1: patch 1 (score=6) -> overlap empty
-        args = _dummy_payload_args(
-            topq_fraction=0.33,
-            ig_abs_scores=np.array([5.0, 1.0, 1.0]),
-            dlmsf_abs_scores=np.array([1.0, 6.0, 1.0]),
-        )
-        payload = _build_case_visualization_payload(**args)
-        assert math.isnan(payload["sign_map"]["sign_agreement_at_20"])
-
-    def test_sign_agreement_ignores_nonfinite_as_opposite(self):
-        # patch 0 in overlap: ig=nan -> opposite; patch 1: ig=-4, dlmsf=-1 -> same
-        # agreement = 1/2 = 0.5
-        args = _dummy_payload_args(
-            ig_signed_scores=np.array([float("nan"), -4.0, 1.0]),
-            dlmsf_signed_scores=np.array([2.0, -1.0, -1.0]),
-        )
-        payload = _build_case_visualization_payload(**args)
-        assert payload["sign_map"]["sign_agreement_at_20"] == pytest.approx(0.5)
-
-
-# ---------------------------------------------------------------------------
-# Tests: sign_map section — sign_class_map
-# ---------------------------------------------------------------------------
-
-class TestSignClassMap:
-
-    def test_sign_class_map_non_overlap_cells_are_zero(self):
-        # Default: overlap = {0, 1}, non-overlap = patch 2 -> cell (0,2)
-        payload = _build_case_visualization_payload(**_dummy_payload_args())
-        cmap = np.array(payload["sign_map"]["sign_class_map"])
-        assert cmap[0, 2] == 0, "Non-overlap cell should be 0"
-
-    def test_sign_class_map_same_sign_positive_is_one(self):
-        # Default: patch 0 -> ig=+5, dlmsf=+2 -> class 1, cell (0,0)
-        payload = _build_case_visualization_payload(**_dummy_payload_args())
-        cmap = np.array(payload["sign_map"]["sign_class_map"])
-        assert cmap[0, 0] == 1, "Same-sign positive cell should be 1"
-
-    def test_sign_class_map_same_sign_negative_is_two(self):
-        # Default: patch 1 -> ig=-4, dlmsf=-1 -> class 2, cell (0,1)
-        payload = _build_case_visualization_payload(**_dummy_payload_args())
-        cmap = np.array(payload["sign_map"]["sign_class_map"])
-        assert cmap[0, 1] == 2, "Same-sign negative cell should be 2"
-
-    def test_sign_class_map_opposite_sign_is_three(self):
-        # patch 0: ig=+5, dlmsf=-2 -> opposite (class 3)
-        args = _dummy_payload_args(
-            ig_signed_scores=np.array([5.0, -4.0, 1.0]),
-            dlmsf_signed_scores=np.array([-2.0, -1.0, -1.0]),
-        )
-        payload = _build_case_visualization_payload(**args)
-        cmap = np.array(payload["sign_map"]["sign_class_map"])
-        assert cmap[0, 0] == 3, "Opposite-sign cell should be 3"
-
-    def test_sign_class_map_has_correct_shape(self):
-        payload = _build_case_visualization_payload(**_dummy_payload_args())
-        cmap = np.array(payload["sign_map"]["sign_class_map"])
-        assert cmap.shape == SHAPE
-
-    def test_sign_class_map_contains_overlap_mask(self):
-        payload = _build_case_visualization_payload(**_dummy_payload_args())
-        assert "overlap_mask" in payload["sign_map"]
-        mask = np.array(payload["sign_map"]["overlap_mask"])
-        assert mask.shape == SHAPE
-        # overlap patches 0 and 1 cover cells (0,0) and (0,1)
-        assert mask[0, 0] is np.bool_(True)
-        assert mask[0, 1] is np.bool_(True)
-        assert mask[0, 2] is np.bool_(False)
-
-
-# ---------------------------------------------------------------------------
 # Task 2 tests: _case_summary must expose visualization payload
 # ---------------------------------------------------------------------------
 
@@ -293,7 +192,7 @@ def _dummy_visualization_payload() -> dict:
     return {
         "meta": {"direction": "along", "patch_size": 3, "target_time_idx": 0, "topq_fraction": 0.2},
         "overlap": {"spearman_rho": 0.7, "iou_at_20": 0.5, "ig_abs_map": [[1.0]], "dlmsf_abs_map": [[2.0]],
-                    "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
+                     "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
         "scatter": {"x_patch_abs_scores": [1.0], "y_patch_abs_scores": [2.0], "spearman_rho": 0.7},
         "sign_map": {"sign_class_map": [[1]], "sign_agreement_at_20": 1.0,
                      "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
@@ -357,10 +256,6 @@ class TestCaseSummaryExposesVisualization:
     def test_case_summary_visualization_overlap_has_spearman(self):
         summary = _case_summary(_make_dummy_case())
         assert "spearman_rho" in summary["visualization"]["overlap"]
-
-    def test_case_summary_visualization_sign_map_has_agreement(self):
-        summary = _case_summary(_make_dummy_case())
-        assert "sign_agreement_at_20" in summary["visualization"]["sign_map"]
 
     def test_case_summary_without_deletion_has_no_deletion_key(self):
         summary = _case_summary(_make_dummy_case(with_deletion=False))

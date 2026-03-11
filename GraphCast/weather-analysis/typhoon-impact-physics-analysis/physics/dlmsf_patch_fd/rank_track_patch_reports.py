@@ -81,8 +81,6 @@ def collect_track_patch_rows(
         if not _matches_subset(report, report_path, subset):
             continue
         case = report.get("cases", {}).get(main_case)
-        wind_case_key = main_case.replace("along_p", "wind_along_signed_p")
-        wind_case = report.get("cases", {}).get(wind_case_key, {})
         if not isinstance(case, dict):
             continue
         metrics = case.get("metrics", {})
@@ -106,8 +104,6 @@ def collect_track_patch_rows(
                 "high_ig_aopc": float(deletion.get("high_ig_aopc", np.nan)),
                 "low_ig_aopc": float(deletion.get("low_ig_aopc", np.nan)),
                 "random_mean_aopc": float(deletion.get("random_mean_aopc", np.nan)),
-                "signed_spearman": float(wind_case.get("signed_spearman", np.nan)),
-                "sign_agreement_at_30": float(wind_case.get("sign_agreement_at_30", np.nan)),
             }
         )
     return rows
@@ -162,21 +158,17 @@ def rank_track_patch_rows(
     pearson_z = _zscore(np.asarray([row["pearson_r"] for row in strong_rows], dtype=np.float64))
     iou_z = _zscore(np.asarray([row["iou_topq"] for row in strong_rows], dtype=np.float64))
     advantage_z = _zscore(np.asarray([row["deletion_advantage"] for row in strong_rows], dtype=np.float64))
-    wind_sign_vals = np.asarray([row.get("signed_spearman", np.nan) for row in strong_rows], dtype=np.float64)
-    wind_sign_z = _zscore(wind_sign_vals)
-
     ranked_rows: List[Dict[str, Any]] = []
     for idx, row in enumerate(strong_rows):
         new_row = dict(row)
         new_row["z_pearson"] = float(pearson_z[idx]) if idx < pearson_z.size else 0.0
         new_row["z_iou"] = float(iou_z[idx]) if idx < iou_z.size else 0.0
         new_row["z_deletion_advantage"] = float(advantage_z[idx]) if idx < advantage_z.size else 0.0
-        new_row["z_wind_sign"] = float(wind_sign_z[idx]) if idx < wind_sign_z.size else 0.0
         new_row["score"] = (
             0.35 * new_row["z_pearson"]
             + 0.35 * new_row["z_iou"]
             + 0.15 * new_row["z_deletion_advantage"]
-            + 0.15 * new_row["z_wind_sign"]
+            + 0.15 * 0.0
         )
         ranked_rows.append(new_row)
 
@@ -214,8 +206,6 @@ def write_ranked_rows_csv(rows: Iterable[Dict[str, Any]], output_path: str | Pat
         "score",
         "pearson_r",
         "spearman_rho",
-        "signed_spearman",
-        "sign_agreement_at_30",
         "iou_topq",
         "track_signal_abs",
         "ig_completeness_rel_err",
@@ -223,7 +213,6 @@ def write_ranked_rows_csv(rows: Iterable[Dict[str, Any]], output_path: str | Pat
         "random_mean_aopc",
         "low_ig_aopc",
         "deletion_advantage",
-        "z_wind_sign",
     ]
     with output_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
