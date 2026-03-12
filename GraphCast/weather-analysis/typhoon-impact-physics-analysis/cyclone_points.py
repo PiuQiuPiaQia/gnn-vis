@@ -10,6 +10,24 @@ CYCLONE_CENTERS = [
 ]
 
 
+CYCLONE_TAUKTAE_CENTERS = [
+    {"time": "2021-05-16 00Z", "lat": 14.9979, "lon": 72.7998, "pressure": -1.0, "wind_speed": -1, "category": "Tauktae", "data_type": "tauktae", "is_input": True, "input_time_idx": 0},
+    {"time": "2021-05-16 06Z", "lat": 15.7978, "lon": 72.7998, "pressure": -1.0, "wind_speed": -1, "category": "Tauktae", "data_type": "tauktae", "is_input": True, "input_time_idx": 1},
+    {"time": "2021-05-16 12Z", "lat": 16.7974, "lon": 72.5001, "pressure": -1.0, "wind_speed": -1, "category": "Tauktae", "data_type": "tauktae", "is_input": False, "target_time_idx": 0},
+    {"time": "2021-05-16 18Z", "lat": 17.6973, "lon": 71.9998, "pressure": -1.0, "wind_speed": -1, "category": "Tauktae", "data_type": "tauktae", "is_input": False, "target_time_idx": 1},
+    {"time": "2021-05-17 00Z", "lat": 18.3979, "lon": 71.6989, "pressure": -1.0, "wind_speed": -1, "category": "Tauktae", "data_type": "tauktae", "is_input": False, "target_time_idx": 2},
+]
+
+
+CYCLONE_YAAS_CENTERS = [
+    {"time": "2021-05-25 00Z", "lat": 18.0966, "lon": 88.5997, "pressure": -1.0, "wind_speed": -1, "category": "Yaas", "data_type": "yaas", "is_input": True, "input_time_idx": 0},
+    {"time": "2021-05-25 06Z", "lat": 18.7964, "lon": 88.2007, "pressure": -1.0, "wind_speed": -1, "category": "Yaas", "data_type": "yaas", "is_input": True, "input_time_idx": 1},
+    {"time": "2021-05-25 12Z", "lat": 19.4990, "lon": 88.2007, "pressure": -1.0, "wind_speed": -1, "category": "Yaas", "data_type": "yaas", "is_input": False, "target_time_idx": 0},
+    {"time": "2021-05-25 18Z", "lat": 20.2970, "lon": 87.8081, "pressure": -1.0, "wind_speed": -1, "category": "Yaas", "data_type": "yaas", "is_input": False, "target_time_idx": 1},
+    {"time": "2021-05-26 00Z", "lat": 20.5979, "lon": 87.5990, "pressure": -1.0, "wind_speed": -1, "category": "Yaas", "data_type": "yaas", "is_input": False, "target_time_idx": 2},
+]
+
+
 def pick_target_cyclone(target_time_idx: int) -> dict:
     for c in CYCLONE_CENTERS:
         if not c.get("is_input", True) and c.get("target_time_idx") == target_time_idx:
