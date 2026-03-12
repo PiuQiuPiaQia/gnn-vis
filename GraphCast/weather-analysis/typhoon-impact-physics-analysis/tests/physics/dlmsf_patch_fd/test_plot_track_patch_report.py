@@ -164,12 +164,38 @@ def test_deletion_figure_annotation_does_not_contain_auc(tmp_path):
     assert "0.57" in text  # AOPC values are present
 
 
+def test_overlap_figure_uses_single_subplot(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+    import physics.dlmsf_patch_fd.plot_track_patch_report as plot_track_patch_report
+
+    original_subplots = plt.subplots
+    subplots_calls = []
+
+    def mock_subplots(*args, **kwargs):
+        subplots_calls.append((args, kwargs))
+        return original_subplots(*args, **kwargs)
+
+    monkeypatch.setattr(plot_track_patch_report.plt, "subplots", mock_subplots)
+
+    plot_track_patch_report.plot_track_patch_overlap_k50(
+        _dummy_report(),
+        tmp_path / "overlap.png",
+        dpi=100,
+    )
+
+    assert subplots_calls, "subplots mock was not triggered"
+    args, kwargs = subplots_calls[-1]
+    nrows = kwargs.get("nrows", args[0] if len(args) > 0 else 1)
+    ncols = kwargs.get("ncols", args[1] if len(args) > 1 else 1)
+    assert (nrows, ncols) == (1, 1)
+
+
 def test_scatter_xlabel_is_dlmsf(monkeypatch):
     """x-axis (data = dlmsf_abs) label should contain 'DLMSF', y-axis should contain 'IG'."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from physics.dlmsf_patch_fd import plot_track_patch_report
+    import physics.dlmsf_patch_fd.plot_track_patch_report as plot_track_patch_report
 
     captured_axes = []
     original_subplots = plt.subplots

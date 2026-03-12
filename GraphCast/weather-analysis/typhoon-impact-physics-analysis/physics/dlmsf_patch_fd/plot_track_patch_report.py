@@ -49,36 +49,6 @@ def _prep_lat_oriented_field(
     return arr, lat
 
 
-def _plot_field(
-    ax,
-    field: np.ndarray,
-    *,
-    lat_vals: np.ndarray,
-    lon_vals: np.ndarray,
-    title: str,
-    cmap: str,
-    colorbar_label: str,
-) -> None:
-    plot_field, plot_lat = _prep_lat_oriented_field(field, lat_vals)
-    extent = [
-        float(np.min(lon_vals)),
-        float(np.max(lon_vals)),
-        float(np.min(plot_lat)),
-        float(np.max(plot_lat)),
-    ]
-    image = ax.imshow(
-        np.ma.masked_invalid(plot_field),
-        origin="lower",
-        extent=extent,
-        aspect="auto",
-        cmap=cmap,
-    )
-    ax.set_title(title)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    plt.colorbar(image, ax=ax, fraction=0.046, pad=0.04, label=colorbar_label)
-
-
 # ---------------------------------------------------------------------------
 # Annotation helpers — exposed for unit-test verification
 # ---------------------------------------------------------------------------
@@ -109,7 +79,7 @@ def _format_deletion_annotation(
 
 
 # ---------------------------------------------------------------------------
-# Figure 1: |IG| + |DLMSF| heatmaps + Top-K overlap binary map
+# Figure 1: Top-K overlap binary map
 # ---------------------------------------------------------------------------
 
 
@@ -128,52 +98,30 @@ def plot_track_patch_overlap_k50(
 
     lat_vals = _as_float_array(overlap["lat_vals"], ndim=1)
     lon_vals = _as_float_array(overlap["lon_vals"], ndim=1)
-    ig_abs_map = _as_float_array(overlap["ig_abs_map"], ndim=2)
-    dlmsf_abs_map = _as_float_array(overlap["dlmsf_abs_map"], ndim=2)
     overlap_mask = _as_bool_array(overlap["overlap_mask"], ndim=2)
     spearman_rho = float(overlap["spearman_rho"])
     iou_at_50 = float(overlap["iou_at_50"])
 
     meta = viz.get("meta", {})
-    direction = str(meta.get("direction", "along"))
     topk_k = int(meta.get("topk_k", 50))
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), dpi=dpi, constrained_layout=True)
-
-    _plot_field(
-        axes[0],
-        ig_abs_map,
-        lat_vals=lat_vals,
-        lon_vals=lon_vals,
-        title="|IG| Patch Score",
-        cmap="YlOrRd",
-        colorbar_label="|IG|",
-    )
-    _plot_field(
-        axes[1],
-        dlmsf_abs_map,
-        lat_vals=lat_vals,
-        lon_vals=lon_vals,
-        title=f"|DLMSF_{direction}| Patch Score",
-        cmap="YlGnBu",
-        colorbar_label=f"|DLMSF_{direction}|",
-    )
+    fig, ax = plt.subplots(1, 1, figsize=(5.5, 4.5), dpi=dpi, constrained_layout=True)
 
     # Binary overlap map
     overlap_float = overlap_mask.astype(np.float64)
     overlap_field, overlap_lat = _prep_lat_oriented_field(overlap_float, lat_vals)
-    extent = [
+    extent = (
         float(np.min(lon_vals)),
         float(np.max(lon_vals)),
         float(np.min(overlap_lat)),
         float(np.max(overlap_lat)),
-    ]
+    )
     overlap_cmap = ListedColormap(["#f0f0f0", "#2c3e50"])
     overlap_norm = BoundaryNorm([-0.5, 0.5, 1.5], overlap_cmap.N)
-    axes[2].imshow(
+    ax.imshow(
         overlap_field,
         origin="lower",
         extent=extent,
@@ -181,10 +129,10 @@ def plot_track_patch_overlap_k50(
         cmap=overlap_cmap,
         norm=overlap_norm,
     )
-    axes[2].set_title(f"Top-{topk_k} Overlap")
-    axes[2].set_xlabel("Longitude")
-    axes[2].set_ylabel("Latitude")
-    axes[2].legend(
+    ax.set_title(f"Top-{topk_k} Overlap")
+    ax.set_xlabel("Longitude")
+    ax.set_ylabel("Latitude")
+    ax.legend(
         handles=[
             mpatches.Patch(facecolor="#f0f0f0", edgecolor="#aaaaaa", label="Not in overlap"),
             mpatches.Patch(facecolor="#2c3e50", edgecolor="none", label="Overlap"),
@@ -195,11 +143,11 @@ def plot_track_patch_overlap_k50(
     )
 
     annotation = _format_overlap_annotation(spearman_rho=spearman_rho, iou_at_50=iou_at_50)
-    axes[2].text(
+    ax.text(
         0.98,
         0.98,
         annotation,
-        transform=axes[2].transAxes,
+        transform=ax.transAxes,
         ha="right",
         va="top",
         fontsize=9,
