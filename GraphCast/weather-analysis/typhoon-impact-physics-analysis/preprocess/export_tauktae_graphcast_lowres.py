@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         "--output",
         type=Path,
         default=None,
-        help="Target NetCDF path. Defaults to the GraphCast low-res filename under /root/data/dataset.",
+        help="Target NetCDF path. Defaults to the GraphCast low-res filename under /root/autodl-tmp/dataset.",
     )
     parser.add_argument(
         "--steps",

@@ -113,7 +113,7 @@ def build_relative_times(steps: int = 4) -> np.ndarray:
     return hours.astype("timedelta64[h]").astype("timedelta64[ns]")
 
 
-def default_output_path(base_dir: str | Path = "/root/data/dataset", steps: int = 4) -> Path:
+def default_output_path(base_dir: str | Path = "/root/autodl-tmp/dataset", steps: int = 4) -> Path:
     start_time = build_track_window(CYCLONE_TAUKTAE_CENTERS, steps=steps)[0]
     file_name = (
         f"dataset-source-era5_date-{start_time.strftime('%Y-%m-%d')}"
