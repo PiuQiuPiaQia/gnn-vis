@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -56,6 +56,11 @@ ATMOSPHERIC_VARS = (
 )
 WB2_LOW_RES_VARS = STATIC_VARS + tuple(v for v in SURFACE_VARS if v != "toa_incident_solar_radiation") + ATMOSPHERIC_VARS
 EXPECTED_DATA_VARS = STATIC_VARS + SURFACE_VARS + ATMOSPHERIC_VARS
+UTC_TIME_FORMATS = (
+    "%Y-%m-%d %HZ",
+    "%m/%d/%Y %HZ",
+)
+XarrayLoadable = TypeVar("XarrayLoadable", xr.Dataset, xr.DataArray)
 
 
 def ensure_runtime_dependencies() -> None:
@@ -88,19 +93,80 @@ def parse_track_times(track_points: Sequence[dict]) -> pd.DatetimeIndex:
     return times
 
 
+def parse_utc_timestamp(value: str | pd.Timestamp) -> pd.Timestamp:
+    if isinstance(value, pd.Timestamp):
+        timestamp = value
+    else:
+        parsed: pd.Timestamp | None = None
+        for fmt in UTC_TIME_FORMATS:
+            try:
+                parsed = pd.to_datetime(value, format=fmt)
+                break
+            except ValueError:
+                continue
+        if parsed is None:
+            raise ValueError(
+                "Unsupported UTC timestamp format. Expected one of: "
+                f"{', '.join(UTC_TIME_FORMATS)}; got {value!r}"
+            )
+        timestamp = parsed
+
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
+
+    if (
+        timestamp.minute != 0
+        or timestamp.second != 0
+        or timestamp.microsecond != 0
+        or timestamp.nanosecond != 0
+        or timestamp.hour % 6 != 0
+    ):
+        raise ValueError(
+            "UTC timestamps must land exactly on a 6-hour boundary, got "
+            f"{timestamp.isoformat()}"
+        )
+    return timestamp
+
+
+def validate_contiguous_6h_window(abs_times: Sequence[str | pd.Timestamp]) -> pd.DatetimeIndex:
+    times = pd.DatetimeIndex([parse_utc_timestamp(value) for value in abs_times])
+    if len(times) < 3:
+        raise ValueError(
+            "Export window must contain at least 3 timestamps "
+            "(2 input times + at least 1 target time)"
+        )
+
+    expected = pd.date_range(start=times[0], periods=len(times), freq="6h")
+    if not times.equals(expected):
+        raise ValueError(
+            "Export window must be contiguous 6-hour steps, got "
+            f"{list(times.astype(str))}"
+        )
+    return times
+
+
+def build_explicit_window(
+    start_time: str | pd.Timestamp,
+    end_time: str | pd.Timestamp,
+) -> pd.DatetimeIndex:
+    start = parse_utc_timestamp(start_time)
+    end = parse_utc_timestamp(end_time)
+    if end < start:
+        raise ValueError(
+            f"end_time must be >= start_time, got {start.isoformat()} -> {end.isoformat()}"
+        )
+    abs_times = pd.date_range(start=start, end=end, freq="6h")
+    return validate_contiguous_6h_window(abs_times)
+
+
 def build_track_window(track_points: Sequence[dict], steps: int = 4) -> pd.DatetimeIndex:
     if steps < 1:
         raise ValueError(f"steps must be >= 1, got {steps}")
 
     track_times = parse_track_times(track_points)
     output_times = pd.date_range(start=track_times[0], periods=steps + 2, freq="6h")
-    if len(track_times) > len(output_times):
-        raise ValueError(
-            "Requested export window is shorter than the provided cyclone track: "
-            f"{len(track_times)} track points vs {len(output_times)} output times"
-        )
-
-    if not track_times.equals(output_times[: len(track_times)]):
+    compare_len = min(len(track_times), len(output_times))
+    if not track_times[:compare_len].equals(output_times[:compare_len]):
         raise ValueError(
             "Cyclone track does not align with the requested export window. "
             f"track={list(track_times.astype(str))}, window={list(output_times.astype(str))}"
@@ -113,11 +179,25 @@ def build_relative_times(steps: int = 4) -> np.ndarray:
     return hours.astype("timedelta64[h]").astype("timedelta64[ns]")
 
 
-def default_output_path(base_dir: str | Path = "/root/autodl-tmp/dataset", steps: int = 4) -> Path:
-    start_time = build_track_window(CYCLONE_TAUKTAE_CENTERS, steps=steps)[0]
+def infer_steps_from_window(abs_times: Sequence[str | pd.Timestamp]) -> int:
+    return len(validate_contiguous_6h_window(abs_times)) - 2
+
+
+def default_output_path(
+    base_dir: str | Path = "/root/autodl-tmp/dataset",
+    steps: int = 4,
+    abs_times: Sequence[str | pd.Timestamp] | None = None,
+) -> Path:
+    resolved_times = (
+        build_track_window(CYCLONE_TAUKTAE_CENTERS, steps=steps)
+        if abs_times is None
+        else validate_contiguous_6h_window(abs_times)
+    )
+    resolved_steps = steps if abs_times is None else infer_steps_from_window(resolved_times)
+    start_time = resolved_times[0]
     file_name = (
         f"dataset-source-era5_date-{start_time.strftime('%Y-%m-%d')}"
-        f"_res-1.0_levels-13_steps-{steps:02d}.nc"
+        f"_res-1.0_levels-13_steps-{resolved_steps:02d}.nc"
     )
     return Path(base_dir) / file_name
 
@@ -135,11 +215,30 @@ def normalize_lat_lon_names(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
+def load_with_progress(
+    obj: XarrayLoadable,
+    description: str,
+    *,
+    show_progress: bool = True,
+) -> XarrayLoadable:
+    if not show_progress:
+        return obj.load()
+
+    from dask.diagnostics import ProgressBar
+
+    print(f"{description}...", flush=True)
+    with ProgressBar():
+        loaded = obj.load()
+    print(f"{description} complete.", flush=True)
+    return loaded
+
+
 def load_low_res_fields(
     abs_times: pd.DatetimeIndex,
     *,
     low_res_store: str = GRAPHCAST_LOW_RES_STORE,
     solar_store: str = SOLAR_STORE,
+    show_progress: bool = True,
 ) -> tuple[xr.Dataset, xr.DataArray]:
     ensure_runtime_dependencies()
 
@@ -154,7 +253,11 @@ def load_low_res_fields(
         time=abs_times,
         level=list(GRAPHCAST_13_LEVELS),
     )
-    low_res_ds = low_res_ds.load()
+    low_res_ds = load_with_progress(
+        low_res_ds,
+        f"Loading low-res ERA5 fields ({len(abs_times)} timestamps)",
+        show_progress=show_progress,
+    )
 
     solar_ds = xr.open_zarr(solar_store, **open_kwargs)
     solar_ds = normalize_lat_lon_names(solar_ds)
@@ -164,7 +267,11 @@ def load_low_res_fields(
         lon=low_res_ds["lon"].values,
         method="nearest",
     )
-    solar_da = solar_da.transpose("time", "lat", "lon").load()
+    solar_da = load_with_progress(
+        solar_da.transpose("time", "lat", "lon"),
+        f"Loading solar forcing ({len(abs_times)} timestamps)",
+        show_progress=show_progress,
+    )
     return low_res_ds, solar_da
 
 
@@ -248,28 +355,44 @@ def export_tauktae_graphcast_low_res(
     force: bool = False,
     low_res_store: str = GRAPHCAST_LOW_RES_STORE,
     solar_store: str = SOLAR_STORE,
+    abs_times: Sequence[str | pd.Timestamp] | None = None,
+    show_progress: bool = True,
 ) -> Path:
-    output_path = Path(output_path) if output_path is not None else default_output_path(steps=steps)
+    resolved_times = (
+        build_track_window(CYCLONE_TAUKTAE_CENTERS, steps=steps)
+        if abs_times is None
+        else validate_contiguous_6h_window(abs_times)
+    )
+    resolved_steps = steps if abs_times is None else infer_steps_from_window(resolved_times)
+    output_path = (
+        Path(output_path)
+        if output_path is not None
+        else default_output_path(steps=resolved_steps, abs_times=resolved_times)
+    )
     if output_path.exists() and not force:
         raise FileExistsError(
             f"{output_path} already exists. Pass force=True or use --force to overwrite it."
         )
 
-    abs_times = build_track_window(CYCLONE_TAUKTAE_CENTERS, steps=steps)
     low_res_ds, solar_da = load_low_res_fields(
-        abs_times,
+        resolved_times,
         low_res_store=low_res_store,
         solar_store=solar_store,
+        show_progress=show_progress,
     )
     export_ds = assemble_graphcast_low_res_dataset(
         low_res_ds,
         solar_da,
-        abs_times=abs_times,
-        steps=steps,
+        abs_times=resolved_times,
+        steps=resolved_steps,
     )
-    validate_graphcast_low_res_dataset(export_ds, abs_times=abs_times, steps=steps)
+    validate_graphcast_low_res_dataset(export_ds, abs_times=resolved_times, steps=resolved_steps)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     encoding = {var_name: {"zlib": True, "complevel": 1} for var_name in export_ds.data_vars}
+    if show_progress:
+        print(f"Writing NetCDF to {output_path}...", flush=True)
     export_ds.to_netcdf(output_path, engine="netcdf4", encoding=encoding)
+    if show_progress:
+        print("NetCDF write complete.", flush=True)
     return output_path

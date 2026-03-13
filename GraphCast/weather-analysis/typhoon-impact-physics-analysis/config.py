@@ -1,16 +1,42 @@
 # -*- coding: utf-8 -*-
 """台风关键网格点（IG 候选 + 扰动验证）分析配置。"""
 
+TAUKTAE_LONG_RANGE_DATASET_FILE = "dataset-source-era5_date-2021-05-13_res-1.0_levels-13_steps-23.nc"
+TAUKTAE_WINDOW_START_TIMES = {
+    "T-7": "2021-05-13 06Z",
+    "T-4": "2021-05-16 00Z",
+    "T-2": "2021-05-18 00Z",
+}
+
+
+def tauktae_long_range_dataset_file(start_time=None):
+    del start_time
+    return TAUKTAE_LONG_RANGE_DATASET_FILE
+
+
 DATASET_CONFIGS = {
     "low_res": {
         "name": "Low-res (1.0deg, 13 levels)",
         "params_file": "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz",
         "dataset_file": "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc",
     },
-    "tauktae_low_res": {
-        "name": "Tauktae low-res (2021-05-16, 1.0deg, 13 levels)",
+    "tauktae_low_res_2021_05_13": {
+        "name": "Tauktae low-res T-7 day window (start 2021-05-13 06Z)",
         "params_file": "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz",
-        "dataset_file": "dataset-source-era5_date-2021-05-16_res-1.0_levels-13_steps-04.nc",
+        "dataset_file": tauktae_long_range_dataset_file,
+        "dataset_start_time": TAUKTAE_WINDOW_START_TIMES["T-7"],
+    },
+    "tauktae_low_res_2021_05_16": {
+        "name": "Tauktae low-res T-4 day window (start 2021-05-16 00Z)",
+        "params_file": "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz",
+        "dataset_file": tauktae_long_range_dataset_file,
+        "dataset_start_time": TAUKTAE_WINDOW_START_TIMES["T-4"],
+    },
+    "tauktae_low_res_2021_05_18": {
+        "name": "Tauktae low-res T-2 day window (start 2021-05-18 00Z)",
+        "params_file": "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz",
+        "dataset_file": tauktae_long_range_dataset_file,
+        "dataset_start_time": TAUKTAE_WINDOW_START_TIMES["T-2"],
     },
     "high_res": {
         "name": "High-res (0.25deg, 37 levels)",
@@ -20,7 +46,15 @@ DATASET_CONFIGS = {
 }
 
 # 数据与目标配置
-DATASET_TYPE = "low_res"  # "low_res" | "tauktae_low_res" | "high_res"
+DATASET_TYPE = "tauktae_low_res_2021_05_13"
+DATASET_TYPES = [
+    "low_res",
+    "tauktae_low_res_2021_05_13",
+    "tauktae_low_res_2021_05_16",
+    "tauktae_low_res_2021_05_18",
+]  # 批量运行时使用；若只跑单个，设 DATASET_TYPES=None 并改 DATASET_TYPE
+DATASET_START_TIME = None  # e.g. "2021-05-16 00Z" when slicing a longer GraphCast-formatted NC
+EVAL_STEPS = 4
 TARGET_TIME_IDX = 0  # 0(+6h),1(+12h),2(+18h),3(+24h)
 TARGET_VARIABLE = "mean_sea_level_pressure"
 
@@ -126,6 +160,7 @@ TRACK_PATCH_STRIDE = 2
 TRACK_PATCH_ABLATION_SIZES = [3]
 TRACK_DIRECTIONS = ["along"]
 TRACK_TOPK_K = 50
+RESULTS_GROUP_K = TRACK_TOPK_K  # 批量结果目录: validation_results/k{RESULTS_GROUP_K}/{dataset_type}/
 TRACK_SOFTMIN_TEMPERATURE = 1.0
 TRACK_DELETION_ENABLE = True
 TRACK_DELETION_RANDOM_REPEATS = 8

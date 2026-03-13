@@ -28,6 +28,13 @@ def _load_netcdf_dataset(path: str):
         return xarray.open_dataset(path).load()
 
 
+def open_dataset(dataset_path: str):
+    try:
+        return xarray.open_dataset(dataset_path, engine="netcdf4")
+    except Exception:
+        return xarray.open_dataset(dataset_path)
+
+
 def load_checkpoint(params_path: str):
     with open(params_path, "rb") as f:
         ckpt = checkpoint.load(f, graphcast.CheckPoint)

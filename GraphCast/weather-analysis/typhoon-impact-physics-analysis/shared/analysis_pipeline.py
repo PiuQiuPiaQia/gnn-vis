@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -11,8 +13,10 @@ from typing import Any, Dict, List, Optional
 class AnalysisConfig:
     """当前 IG 候选筛选 + 扰动验证流程所需的最小配置集合。"""
 
-    dataset_configs: Dict[str, Dict[str, str]]
+    dataset_configs: Dict[str, Dict[str, Any]]
     dataset_type: str
+    dataset_start_time: Any
+    eval_steps: int
     target_time_idx: int
     target_variable: str
     target_level: Any
@@ -48,6 +52,8 @@ class AnalysisConfig:
         return cls(
             dataset_configs=cfg_module.DATASET_CONFIGS,
             dataset_type=cfg_module.DATASET_TYPE,
+            dataset_start_time=getattr(cfg_module, "DATASET_START_TIME", None),
+            eval_steps=int(getattr(cfg_module, "EVAL_STEPS", 4)),
             target_time_idx=int(cfg_module.TARGET_TIME_IDX),
             target_variable=cfg_module.TARGET_VARIABLE,
             target_level=getattr(cfg_module, "TARGET_LEVEL", None),
@@ -82,7 +88,7 @@ class AnalysisConfig:
 
 @dataclass
 class AnalysisContext:
-    dataset_config: Dict[str, str]
+    dataset_config: Dict[str, Any]
     run_forward_jitted: Any
     eval_inputs: Any
     eval_targets: Any
@@ -129,6 +135,98 @@ def select_target_data(outputs, var: str, target_level: Any):
     return data
 
 
+def resolve_dataset_file_value(dataset_file: Any, dataset_start_time: Any) -> Any:
+    if not callable(dataset_file):
+        return dataset_file
+
+    signature = inspect.signature(dataset_file)
+    supported_params = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind
+        in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        )
+    ]
+    if not supported_params:
+        return dataset_file()
+    if len(supported_params) > 1:
+        raise TypeError(
+            "dataset_file callable must accept zero or one argument "
+            "(e.g. start_time or dataset_start_time)."
+        )
+
+    parameter = supported_params[0]
+    if parameter.kind is inspect.Parameter.KEYWORD_ONLY:
+        return dataset_file(**{parameter.name: dataset_start_time})
+    return dataset_file(dataset_start_time)
+
+
+def resolve_dataset_start_time(dataset_config: Dict[str, Any], global_dataset_start_time: Any) -> Any:
+    if global_dataset_start_time is not None:
+        return global_dataset_start_time
+    return dataset_config.get("dataset_start_time")
+
+
+def load_configured_dataset(runtime_cfg: AnalysisConfig, dataset_config: Dict[str, Any]):
+    import xarray as xr
+
+    from shared.dataset_window import slice_graphcast_dataset_window
+
+    if "dataset_file" not in dataset_config:
+        raise KeyError("dataset_config is missing required key: 'dataset_file'")
+
+    resolved_start_time = resolve_dataset_start_time(
+        dataset_config,
+        runtime_cfg.dataset_start_time,
+    )
+    dataset_value = resolve_dataset_file_value(
+        dataset_config["dataset_file"],
+        resolved_start_time,
+    )
+    window_size = runtime_cfg.eval_steps + 2
+
+    if isinstance(dataset_value, xr.Dataset):
+        dataset = dataset_value
+        if resolved_start_time is not None:
+            dataset = slice_graphcast_dataset_window(
+                dataset,
+                resolved_start_time,
+                window_size=window_size,
+            )
+        return dataset
+
+    if not isinstance(dataset_value, (str, Path)):
+        raise TypeError(
+            "dataset_file must resolve to a path-like value, an xarray.Dataset, "
+            f"or a callable returning one of those types; got {type(dataset_value).__name__}"
+        )
+
+    dataset_path = Path(dataset_value)
+    if not dataset_path.is_absolute():
+        dataset_path = Path(runtime_cfg.dir_path_dataset) / dataset_path
+
+    if resolved_start_time is None:
+        from shared.model_utils import load_dataset
+
+        return load_dataset(str(dataset_path))
+
+    from shared.model_utils import open_dataset
+
+    opened_dataset = open_dataset(str(dataset_path))
+    try:
+        sliced_dataset = slice_graphcast_dataset_window(
+            opened_dataset,
+            resolved_start_time,
+            window_size=window_size,
+        )
+        return sliced_dataset.load()
+    finally:
+        opened_dataset.close()
+
+
 def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
     """一次性加载模型/数据，为后续归因方法准备上下文。"""
     import jax
@@ -139,7 +237,6 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
         build_run_forward,
         extract_eval_data,
         load_checkpoint,
-        load_dataset,
         load_normalization_stats,
     )
 
@@ -157,8 +254,12 @@ def build_analysis_context(runtime_cfg: AnalysisConfig) -> AnalysisContext:
     model_config = ckpt.model_config
     task_config = ckpt.task_config
 
-    example_batch = load_dataset(f"{runtime_cfg.dir_path_dataset}/{dataset_config['dataset_file']}")
-    eval_inputs, eval_targets, eval_forcings = extract_eval_data(example_batch, task_config)
+    example_batch = load_configured_dataset(runtime_cfg, dataset_config)
+    eval_inputs, eval_targets, eval_forcings = extract_eval_data(
+        example_batch,
+        task_config,
+        eval_steps=runtime_cfg.eval_steps,
+    )
     diffs_stddev_by_level, mean_by_level, stddev_by_level = load_normalization_stats(
         runtime_cfg.dir_path_stats
     )

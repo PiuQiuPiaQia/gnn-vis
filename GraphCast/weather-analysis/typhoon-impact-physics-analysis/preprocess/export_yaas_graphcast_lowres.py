@@ -10,11 +10,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from cyclone_points import CYCLONE_YAAS_CENTERS  # noqa: E402
 from preprocess.wb2_graphcast_export import (  # noqa: E402
-    CYCLONE_TAUKTAE_CENTERS,
-    build_explicit_window,
     GRAPHCAST_LOW_RES_STORE,
     SOLAR_STORE,
+    build_explicit_window,
     build_track_window,
     default_output_path,
     export_tauktae_graphcast_low_res,
@@ -22,10 +22,13 @@ from preprocess.wb2_graphcast_export import (  # noqa: E402
 )
 
 
+DEFAULT_YAAS_STEPS = len(CYCLONE_YAAS_CENTERS) - 2
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Pull either the default CYCLONE_TAUKTAE_CENTERS window or an explicit "
+            "Pull either the default CYCLONE_YAAS_CENTERS window or an explicit "
             "UTC time range from WeatherBench2 and export it as a GraphCast-compatible "
             "low-resolution sample dataset."
         ),
@@ -40,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--steps",
         type=int,
-        default=4,
+        default=DEFAULT_YAAS_STEPS,
         help="Number of 6-hour target steps in the output file name and relative time axis. Ignored when --start/--end are provided.",
     )
     parser.add_argument(
@@ -98,11 +101,11 @@ def main() -> int:
         steps = infer_steps_from_window(abs_times)
     else:
         steps = args.steps
-        abs_times = build_track_window(CYCLONE_TAUKTAE_CENTERS, steps=steps)
+        abs_times = build_track_window(CYCLONE_YAAS_CENTERS, steps=steps)
 
     output_path = args.output if args.output is not None else default_output_path(steps=steps, abs_times=abs_times)
 
-    print("CYCLONE_TAUKTAE_CENTERS export window:", flush=True)
+    print("CYCLONE_YAAS_CENTERS export window:", flush=True)
     for idx, timestamp in enumerate(abs_times):
         print(f"  [{idx}] {timestamp:%Y-%m-%d %H:%M} UTC", flush=True)
     print(f"Output: {output_path}", flush=True)
