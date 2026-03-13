@@ -21,6 +21,13 @@ from graphcast import graphcast
 from graphcast import normalization
 
 
+def _load_netcdf_dataset(path: str):
+    try:
+        return xarray.open_dataset(path, engine="netcdf4").load()
+    except Exception:
+        return xarray.open_dataset(path).load()
+
+
 def load_checkpoint(params_path: str):
     with open(params_path, "rb") as f:
         ckpt = checkpoint.load(f, graphcast.CheckPoint)
@@ -28,9 +35,7 @@ def load_checkpoint(params_path: str):
 
 
 def load_dataset(dataset_path: str):
-    with open(dataset_path, "rb") as f:
-        ds = xarray.load_dataset(f).compute()
-    return ds
+    return _load_netcdf_dataset(dataset_path)
 
 
 def extract_eval_data(example_batch: xarray.Dataset, task_config, eval_steps: int = 4):
@@ -43,12 +48,11 @@ def extract_eval_data(example_batch: xarray.Dataset, task_config, eval_steps: in
 
 
 def load_normalization_stats(stats_dir: str):
-    with open(f"{stats_dir}/stats-diffs_stddev_by_level.nc", "rb") as f:
-        diffs_stddev_by_level = xarray.load_dataset(f).compute()
-    with open(f"{stats_dir}/stats-mean_by_level.nc", "rb") as f:
-        mean_by_level = xarray.load_dataset(f).compute()
-    with open(f"{stats_dir}/stats-stddev_by_level.nc", "rb") as f:
-        stddev_by_level = xarray.load_dataset(f).compute()
+    diffs_stddev_by_level = _load_netcdf_dataset(
+        f"{stats_dir}/stats-diffs_stddev_by_level.nc"
+    )
+    mean_by_level = _load_netcdf_dataset(f"{stats_dir}/stats-mean_by_level.nc")
+    stddev_by_level = _load_netcdf_dataset(f"{stats_dir}/stats-stddev_by_level.nc")
     return diffs_stddev_by_level, mean_by_level, stddev_by_level
 
 
