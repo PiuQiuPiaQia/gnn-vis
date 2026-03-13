@@ -36,8 +36,10 @@ def _dummy_visualization_payload():
             "iou_at_50": 0.5,
         },
         "scatter": {
-            "x_patch_abs_scores": [0.6, 0.4, 0.2, 0.3, 0.5],
-            "y_patch_abs_scores": [0.5, 0.3, 0.2, 0.4, 0.6],
+            "x_signed_map": [[1.0, -2.0], [3.0, -4.0]],
+            "y_signed_map": [[-1.5, 2.5], [0.5, -3.5]],
+            "patch_radius": 0,
+            "patch_score_agg": "mean",
             "spearman_rho": 0.7,
         },
         "deletion": {
@@ -191,7 +193,7 @@ def test_overlap_figure_uses_single_subplot(tmp_path, monkeypatch):
 
 
 def test_scatter_xlabel_is_dlmsf(monkeypatch):
-    """x-axis (data = dlmsf_abs) label should contain 'DLMSF', y-axis should contain 'IG'."""
+    """x-axis label should contain 'DLMSF', y-axis should contain 'IG'."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -214,8 +216,10 @@ def test_scatter_xlabel_is_dlmsf(monkeypatch):
                 "visualization": {
                     "meta": {"direction": "along"},
                     "scatter": {
-                        "x_patch_abs_scores": [1.0, 2.0, 3.0],
-                        "y_patch_abs_scores": [1.5, 2.5, 0.5],
+                        "x_signed_map": [[1.0, -2.0], [3.0, -4.0]],
+                        "y_signed_map": [[-1.5, 2.5], [0.5, -3.5]],
+                        "patch_radius": 0,
+                        "patch_score_agg": "mean",
                         "spearman_rho": 0.5,
                     },
                 }
@@ -233,3 +237,53 @@ def test_scatter_xlabel_is_dlmsf(monkeypatch):
     ylabel = ax.get_ylabel()
     assert "DLMSF" in xlabel, f"x-axis label should contain 'DLMSF' (data is DLMSF), got: {xlabel!r}"
     assert "IG" in ylabel, f"y-axis label should contain 'IG' (data is IG), got: {ylabel!r}"
+
+
+def test_scatter_uses_signed_grid_vectors(monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import physics.dlmsf_patch_fd.plot_track_patch_report as plot_track_patch_report
+
+    captured = {}
+    original_subplots = plt.subplots
+
+    def mock_subplots(*args, **kwargs):
+        fig, ax = original_subplots(*args, **kwargs)
+        original_scatter = ax.scatter
+
+        def capture_scatter(x, y, *s_args, **s_kwargs):
+            captured["x"] = np.asarray(x, dtype=np.float64)
+            captured["y"] = np.asarray(y, dtype=np.float64)
+            return original_scatter(x, y, *s_args, **s_kwargs)
+
+        ax.scatter = capture_scatter
+        return fig, ax
+
+    monkeypatch.setattr(plot_track_patch_report.plt, "subplots", mock_subplots)
+
+    report = {
+        "main_case": "along_p3",
+        "cases": {
+            "along_p3": {
+                "visualization": {
+                    "meta": {"direction": "along"},
+                    "scatter": {
+                        "x_signed_map": [[1.0, -2.0], [3.0, -4.0]],
+                        "y_signed_map": [[-1.5, 2.5], [0.5, -3.5]],
+                        "patch_radius": 0,
+                        "patch_score_agg": "mean",
+                        "spearman_rho": -0.8,
+                    },
+                }
+            }
+        },
+    }
+
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "scatter.png")
+        plot_track_patch_report.plot_track_patch_scatter(report, out)
+
+    np.testing.assert_array_equal(captured["x"], np.array([1.0, -2.0, 3.0, -4.0]))
+    np.testing.assert_array_equal(captured["y"], np.array([-1.5, 2.5, 0.5, -3.5]))

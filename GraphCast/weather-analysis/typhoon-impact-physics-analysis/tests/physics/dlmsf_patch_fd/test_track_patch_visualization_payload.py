@@ -60,9 +60,13 @@ def _dummy_payload_args(**overrides):
         direction="along",
         patch_size=3,
         target_time_idx=0,
+        patch_radius=0,
+        patch_score_agg="mean",
         topk_k=2,
+        ig_signed_map=np.array([[1.0, -2.0, 3.0]]),
         ig_abs_map=np.array([[1.0, 2.0, 3.0]]),
         ig_abs_scores=np.array([5.0, 4.0, 1.0]),
+        dlmsf_signed_map=np.array([[2.0, -3.0, 1.0]]),
         dlmsf_abs_map=np.array([[2.0, 3.0, 1.0]]),
         dlmsf_abs_scores=np.array([6.0, 3.0, 1.0]),
     )
@@ -149,17 +153,22 @@ class TestVisualizationOverlap:
 
 class TestVisualizationScatter:
 
-    def test_scatter_x_is_dlmsf_abs(self):
+    def test_scatter_contains_signed_dlmsf_map(self):
         args = _dummy_payload_args()
         payload = _build_case_visualization_payload(**args)
-        x = np.array(payload["scatter"]["x_patch_abs_scores"])
-        np.testing.assert_array_equal(x, args["dlmsf_abs_scores"])
+        x = np.array(payload["scatter"]["x_signed_map"])
+        np.testing.assert_array_equal(x, args["dlmsf_signed_map"])
 
-    def test_scatter_y_is_ig_abs(self):
+    def test_scatter_contains_signed_ig_map(self):
         args = _dummy_payload_args()
         payload = _build_case_visualization_payload(**args)
-        y = np.array(payload["scatter"]["y_patch_abs_scores"])
-        np.testing.assert_array_equal(y, args["ig_abs_scores"])
+        y = np.array(payload["scatter"]["y_signed_map"])
+        np.testing.assert_array_equal(y, args["ig_signed_map"])
+
+    def test_scatter_contains_patch_aggregation_settings(self):
+        payload = _build_case_visualization_payload(**_dummy_payload_args())
+        assert payload["scatter"]["patch_radius"] == 0
+        assert payload["scatter"]["patch_score_agg"] == "mean"
 
     def test_scatter_contains_spearman_rho(self):
         payload = _build_case_visualization_payload(**_dummy_payload_args())
@@ -175,7 +184,7 @@ def _dummy_metrics() -> PatchAlignmentMetrics:
     return PatchAlignmentMetrics(
         direction="along",
         patch_size=3,
-        n_patches=4,
+        n_valid=4,
         spearman_rho=0.7,
         spearman_pval=0.05,
         iou_topk=0.5,
@@ -188,7 +197,13 @@ def _dummy_visualization_payload() -> dict:
         "meta": {"direction": "along", "patch_size": 3, "target_time_idx": 0, "topk_k": 50},
         "overlap": {"spearman_rho": 0.7, "iou_at_50": 0.5, "ig_abs_map": [[1.0]], "dlmsf_abs_map": [[2.0]],
                      "overlap_mask": [[True]], "lat_vals": [10.0], "lon_vals": [120.0]},
-        "scatter": {"x_patch_abs_scores": [1.0], "y_patch_abs_scores": [2.0], "spearman_rho": 0.7},
+        "scatter": {
+            "x_signed_map": [[1.0]],
+            "y_signed_map": [[2.0]],
+            "patch_radius": 0,
+            "patch_score_agg": "mean",
+            "spearman_rho": 0.7,
+        },
         "deletion": None,
     }
 

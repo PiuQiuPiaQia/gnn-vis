@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import BoundaryNorm, ListedColormap
 
+from physics.swe.alignment import _patch_signed, _safe_finite_pair
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -47,6 +49,15 @@ def _prep_lat_oriented_field(
     if lat.size >= 2 and lat[0] > lat[-1]:
         return np.flipud(arr), lat[::-1]
     return arr, lat
+
+
+def _positive_linthresh(values: np.ndarray) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    finite = np.abs(arr[np.isfinite(arr)])
+    positive = finite[finite > 0]
+    if positive.size == 0:
+        return 1e-8
+    return float(np.quantile(positive, 0.01))
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +171,7 @@ def plot_track_patch_overlap_k50(
 
 
 # ---------------------------------------------------------------------------
-# Figure 2: Patch-level scatter (rank agreement)
+# Figure 2: Signed grid-level scatter (rank agreement)
 # ---------------------------------------------------------------------------
 
 
@@ -177,8 +188,14 @@ def plot_track_patch_scatter(
     if not isinstance(scatter, dict):
         return None
 
-    x = _as_float_array(scatter["x_patch_abs_scores"], ndim=1)
-    y = _as_float_array(scatter["y_patch_abs_scores"], ndim=1)
+    x_signed_map = _as_float_array(scatter["x_signed_map"], ndim=2)
+    y_signed_map = _as_float_array(scatter["y_signed_map"], ndim=2)
+    patch_radius = int(scatter.get("patch_radius", 0))
+    patch_score_agg = str(scatter.get("patch_score_agg", "mean"))
+    x, y = _safe_finite_pair(
+        _patch_signed(x_signed_map, patch_radius, patch_score_agg),
+        _patch_signed(y_signed_map, patch_radius, patch_score_agg),
+    )
     spearman_rho = float(scatter["spearman_rho"])
 
     meta = viz.get("meta", {})
@@ -189,9 +206,11 @@ def plot_track_patch_scatter(
 
     fig, ax = plt.subplots(figsize=(6, 5), dpi=dpi, constrained_layout=True)
     ax.scatter(x, y, alpha=0.7, s=40, color="#2980b9")
-    ax.set_xlabel(f"|DLMSF_{direction}| patch score")
-    ax.set_ylabel("|IG| patch score")
-    ax.set_title("Patch-Level Rank Agreement")
+    ax.set_xscale("symlog", linthresh=_positive_linthresh(x))
+    ax.set_yscale("symlog", linthresh=_positive_linthresh(y))
+    ax.set_xlabel(f"DLMSF_{direction} signed patch score")
+    ax.set_ylabel("IG signed patch score")
+    ax.set_title("Signed Grid-Level Rank Agreement")
     ax.grid(alpha=0.25)
 
     annotation = _format_scatter_annotation(spearman_rho=spearman_rho)

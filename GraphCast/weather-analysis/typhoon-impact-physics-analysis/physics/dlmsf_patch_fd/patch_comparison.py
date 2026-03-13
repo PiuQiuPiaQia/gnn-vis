@@ -12,6 +12,7 @@ import xarray
 
 from physics.dlmsf_patch_fd.dlmsf_sensitivity import DLMSFSensitivityResult, _extract_uv_levels, _haversine_km, compute_dlmsf_925_300, compute_dlmsf_patch_fd
 from physics.dlmsf_patch_fd.ig_phys import compute_ig_phys_dlmsf_along
+from physics.swe.alignment import _patch_signed, _safe_finite_pair
 from shared.analysis_pipeline import AnalysisConfig, AnalysisContext, resolve_spatial_variables
 from shared.importance_common import collapse_input_attribution_to_latlon
 from shared.patch_geometry import CenteredWindow, build_centered_window, build_sliding_patches, patch_scores_to_grid
@@ -26,11 +27,15 @@ from shared.track_target import (
 class PatchAlignmentMetrics:
     direction: str
     patch_size: int
-    n_patches: int
+    n_valid: int
     spearman_rho: float
     spearman_pval: float
     iou_topk: float
     topk_k: int
+
+    @property
+    def n_patches(self) -> int:
+        return int(self.n_valid)
 
 
 @dataclass
@@ -144,8 +149,8 @@ def _patch_scores_from_maps(
         "patches": patches,
         "signed_scores": signed_scores,
         "abs_scores": abs_scores,
-        "signed_map": patch_scores_to_grid(signed_scores, patches, window.shape, core_mask=window.core_mask),
-        "abs_map": patch_scores_to_grid(abs_scores, patches, window.shape, core_mask=window.core_mask),
+        "signed_map": patch_scores_to_grid(signed_scores.tolist(), patches, window.shape, core_mask=window.core_mask),
+        "abs_map": patch_scores_to_grid(abs_scores.tolist(), patches, window.shape, core_mask=window.core_mask),
     }
 
 
@@ -226,28 +231,33 @@ def _build_case_visualization_payload(
     direction: str,
     patch_size: int,
     target_time_idx: int,
+    patch_radius: int,
+    patch_score_agg: str,
     topk_k: int,
+    ig_signed_map: np.ndarray,
     ig_abs_map: np.ndarray,
     ig_abs_scores: np.ndarray,
+    dlmsf_signed_map: np.ndarray,
     dlmsf_abs_map: np.ndarray,
     dlmsf_abs_scores: np.ndarray,
 ) -> Dict[str, Any]:
     """Build the four-figure visualization payload for a single track-patch case.
 
-    All patch-level score arrays must have length == len(patches).
-
     Payload sections:
         meta        - metadata used for output filenames
         overlap     - |IG|/|DLMSF| heat maps, Top-K overlap mask, Spearman rho, IoU@50
-        scatter     - patch-level abs score arrays (x=DLMSF, y=IG) + Spearman rho
+        scatter     - signed 2-D maps + aggregation settings for SWE-aligned scatter
         deletion    - None by default; wired in by run_track_patch_analysis
     """
     ig_abs = np.asarray(ig_abs_scores, dtype=np.float64)
     dlmsf_abs = np.asarray(dlmsf_abs_scores, dtype=np.float64)
+    ig_grid_signed = _patch_signed(np.asarray(ig_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
+    dlmsf_grid_signed = _patch_signed(np.asarray(dlmsf_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
+    scatter_x, scatter_y = _safe_finite_pair(dlmsf_grid_signed, ig_grid_signed)
 
     # Compute metrics from patch-level arrays
     iou_at_50, actual_k, ig_top_idx, dlmsf_top_idx = _topk_iou(ig_abs, dlmsf_abs, topk_k)
-    spearman_rho, _ = _safe_corr(scipy.stats.spearmanr, ig_abs, dlmsf_abs)
+    spearman_rho, _ = _safe_corr(scipy.stats.spearmanr, scatter_x, scatter_y)
 
     # Compute Top-K overlap patch indices (intersection)
     overlap_patch_idx = sorted(set(ig_top_idx.tolist()) & set(dlmsf_top_idx.tolist()))
@@ -277,8 +287,10 @@ def _build_case_visualization_payload(
             "iou_at_50": float(iou_at_50),
         },
         "scatter": {
-            "x_patch_abs_scores": dlmsf_abs.tolist(),
-            "y_patch_abs_scores": ig_abs.tolist(),
+            "x_signed_map": np.asarray(dlmsf_signed_map, dtype=np.float64).tolist(),
+            "y_signed_map": np.asarray(ig_signed_map, dtype=np.float64).tolist(),
+            "patch_radius": int(patch_radius),
+            "patch_score_agg": str(patch_score_agg),
             "spearman_rho": float(spearman_rho),
         },
         "deletion": None,
@@ -541,26 +553,27 @@ def _compute_alignment_metrics(
     *,
     direction_mode: str,
     patch_size: int,
-    ig_abs_scores: np.ndarray,
-    dlmsf_parallel_scores: np.ndarray,
+    patch_radius: int,
+    patch_score_agg: str,
+    ig_signed_map: np.ndarray,
+    dlmsf_signed_map: np.ndarray,
     topk_k: int,
 ) -> PatchAlignmentMetrics:
-    finite = np.isfinite(ig_abs_scores) & np.isfinite(dlmsf_parallel_scores)
-    x = np.asarray(ig_abs_scores, dtype=np.float64)[finite]
-    y = np.abs(np.asarray(dlmsf_parallel_scores, dtype=np.float64)[finite]
-    )
+    ig_patch_signed = _patch_signed(np.asarray(ig_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
+    dlmsf_patch_signed = _patch_signed(np.asarray(dlmsf_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
+    x, y = _safe_finite_pair(ig_patch_signed, dlmsf_patch_signed)
 
     spearman_rho, spearman_pval = _safe_corr(scipy.stats.spearmanr, x, y)
     iou_topk, actual_topk, _, _ = _topk_iou(
-        np.asarray(ig_abs_scores, dtype=np.float64),
-        np.abs(np.asarray(dlmsf_parallel_scores, dtype=np.float64)),
+        np.abs(ig_patch_signed).ravel(),
+        np.abs(dlmsf_patch_signed).ravel(),
         topk_k,
     )
 
     return PatchAlignmentMetrics(
         direction=str(direction_mode),
         patch_size=int(patch_size),
-        n_patches=int(x.size),
+        n_valid=int(x.size),
         spearman_rho=spearman_rho,
         spearman_pval=spearman_pval,
         iou_topk=iou_topk,
@@ -1130,8 +1143,10 @@ def run_track_patch_analysis(
     metrics = _compute_alignment_metrics(
         direction_mode=direction,
         patch_size=main_patch_size,
-        ig_abs_scores=ig_patch["abs_scores"],
-        dlmsf_parallel_scores=dlmsf_result.patch_parallel_scores,
+        patch_radius=int(runtime_cfg.patch_radius),
+        patch_score_agg=str(runtime_cfg.patch_score_agg),
+        ig_signed_map=ig_maps["signed_cell_map"],
+        dlmsf_signed_map=dlmsf_result.S_signed_map,
         topk_k=topk_k,
     )
     deletion = None
@@ -1175,9 +1190,13 @@ def run_track_patch_analysis(
             direction=direction,
             patch_size=main_patch_size,
             target_time_idx=runtime_cfg.target_time_idx,
+            patch_radius=int(runtime_cfg.patch_radius),
+            patch_score_agg=str(runtime_cfg.patch_score_agg),
             topk_k=topk_k,
+            ig_signed_map=ig_maps["signed_cell_map"],
             ig_abs_map=ig_patch["abs_map"],
             ig_abs_scores=ig_patch["abs_scores"],
+            dlmsf_signed_map=dlmsf_result.S_signed_map,
             dlmsf_abs_map=dlmsf_result.S_abs_map,
             dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
         ),

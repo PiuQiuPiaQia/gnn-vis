@@ -13,6 +13,7 @@ from shared.patch_geometry import CenteredWindow, build_sliding_patches, patch_s
 
 @dataclass
 class DLMSFSensitivityResult:
+    S_signed_map: np.ndarray
     S_abs_map: np.ndarray
     lat_vals: np.ndarray
     lon_vals: np.ndarray
@@ -226,6 +227,7 @@ def compute_dlmsf_patch_fd(
         zeros = np.zeros(window.shape, dtype=np.float64)
         patch_zeros = np.zeros(len(patches), dtype=np.float64)
         return DLMSFSensitivityResult(
+            S_signed_map=zeros,
             S_abs_map=np.abs(zeros),
             lat_vals=window.lat_vals,
             lon_vals=window.lon_vals,
@@ -300,8 +302,14 @@ def compute_dlmsf_patch_fd(
         delta_u = float(U_full) - float(U_minus)
         delta_v = float(V_full) - float(V_minus)
         patch_parallel[idx] = delta_u * float(axis_u) + delta_v * float(axis_v)
+    S_signed_map = patch_scores_to_grid(
+        patch_parallel.tolist(),
+        patches,
+        window.shape,
+        core_mask=window.core_mask,
+    )
     S_abs_map = patch_scores_to_grid(
-        np.abs(patch_parallel),
+        np.abs(patch_parallel).tolist(),
         patches,
         window.shape,
         core_mask=window.core_mask,
@@ -314,6 +322,7 @@ def compute_dlmsf_patch_fd(
         f"V_full=({U_full:+.2f}, {V_full:+.2f})  J={J_full:+.4f}"
     )
     return DLMSFSensitivityResult(
+        S_signed_map=S_signed_map,
         S_abs_map=S_abs_map,
         lat_vals=window.lat_vals,
         lon_vals=window.lon_vals,
