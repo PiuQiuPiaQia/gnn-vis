@@ -7,6 +7,11 @@ DATASET_CONFIGS = {
         "params_file": "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz",
         "dataset_file": "dataset-source-era5_date-2022-01-01_res-1.0_levels-13_steps-04.nc",
     },
+    "tauktae_low_res": {
+        "name": "Tauktae low-res (2021-05-16, 1.0deg, 13 levels)",
+        "params_file": "params-GraphCast_small - ERA5 1979-2015 - resolution 1.0 - pressure levels 13 - mesh 2to5 - precipitation input and output.npz",
+        "dataset_file": "dataset-source-era5_date-2021-05-16_res-1.0_levels-13_steps-04.nc",
+    },
     "high_res": {
         "name": "High-res (0.25deg, 37 levels)",
         "params_file": "params-GraphCast - ERA5 1979-2017 - resolution 0.25 - pressure levels 37 - mesh 2to6 - precipitation input and output.npz",
@@ -15,7 +20,7 @@ DATASET_CONFIGS = {
 }
 
 # 数据与目标配置
-DATASET_TYPE = "low_res"  # "low_res" | "high_res"
+DATASET_TYPE = "low_res"  # "low_res" | "tauktae_low_res" | "high_res"
 TARGET_TIME_IDX = 0  # 0(+6h),1(+12h),2(+18h),3(+24h)
 TARGET_VARIABLE = "mean_sea_level_pressure"
 
