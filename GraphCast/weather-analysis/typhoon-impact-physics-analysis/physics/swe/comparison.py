@@ -32,22 +32,6 @@ def _resolve_dataset_types(cfg_module) -> list[str]:
     return resolved
 
 
-def _resolve_results_group_k(cfg_module) -> int | None:
-    explicit = getattr(cfg_module, "RESULTS_GROUP_K", None)
-    if explicit is not None:
-        return int(explicit)
-
-    if hasattr(cfg_module, "TRACK_TOPK_K"):
-        return int(getattr(cfg_module, "TRACK_TOPK_K"))
-    if hasattr(cfg_module, "SWE_PANEL_TOPK_OVERLAP_K"):
-        return int(getattr(cfg_module, "SWE_PANEL_TOPK_OVERLAP_K"))
-
-    k_values = getattr(cfg_module, "PHYSICS_TOPK_VALUES", None)
-    if isinstance(k_values, (list, tuple)) and k_values:
-        return int(k_values[0])
-    return None
-
-
 def _clone_cfg_with_dataset_type(cfg_module, dataset_type: str):
     payload = dict(vars(cfg_module))
     payload["DATASET_TYPE"] = dataset_type
@@ -66,10 +50,7 @@ def _resolve_run_output_dir(
     root_dir = Path(output_dir) if output_dir is not None else DEFAULT_RESULTS_DIR
     if not batch_mode:
         return root_dir
-
-    group_k = _resolve_results_group_k(cfg_module)
-    k_dir = f"k{group_k}" if group_k is not None else "k_unspecified"
-    return root_dir / k_dir / dataset_type
+    return root_dir / dataset_type
 
 
 def run_physics_comparison_v2(
@@ -116,6 +97,5 @@ def run_physics_comparison_v2(
     return {
         "dataset_types": dataset_types,
         "output_root": str(root_dir),
-        "group_k": _resolve_results_group_k(cfg_module),
         "runs": runs,
     }

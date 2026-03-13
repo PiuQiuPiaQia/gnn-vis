@@ -21,17 +21,15 @@ def test_run_physics_comparison_v2_batches_dataset_types(monkeypatch, tmp_path):
     cfg_module = types.SimpleNamespace(
         DATASET_TYPES=["case_a", "case_b"],
         DATASET_TYPE="case_a",
-        RESULTS_GROUP_K=50,
         TRACK_TOPK_K=50,
     )
 
     result = comparison.run_physics_comparison_v2(output_dir=tmp_path / "out", cfg_module=cfg_module)
 
     assert result["dataset_types"] == ["case_a", "case_b"]
-    assert result["group_k"] == 50
     assert calls == [
-        ("case_a", tmp_path / "out" / "k50" / "case_a"),
-        ("case_b", tmp_path / "out" / "k50" / "case_b"),
+        ("case_a", tmp_path / "out" / "case_a"),
+        ("case_b", tmp_path / "out" / "case_b"),
     ]
 
 
