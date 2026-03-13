@@ -149,10 +149,10 @@ def compute_spearman(
     patch_radius: int = 2,
     patch_score_agg: str = "mean",
 ) -> Tuple[float, float]:
-    """Compute Spearman correlation with signed-preserving preprocessing."""
+    """Compute Spearman correlation with magnitude preprocessing."""
     s, g = _safe_finite_pair(
-        _patch_signed(swe_map, patch_radius, patch_score_agg),
-        _patch_signed(gnn_map, patch_radius, patch_score_agg),
+        _patch_magnitude(swe_map, patch_radius, patch_score_agg),
+        _patch_magnitude(gnn_map, patch_radius, patch_score_agg),
     )
     if len(s) < 5:
         return np.nan, np.nan
@@ -205,8 +205,8 @@ def _group_metrics(
     rho, rpval = compute_spearman(swe_map, gnn_map, patch_radius, patch_score_agg)
     iou = compute_topk_iou(swe_map, gnn_map, k_values, patch_radius, patch_score_agg)
     s, _ = _safe_finite_pair(
-        _patch_signed(swe_map, patch_radius, patch_score_agg),
-        _patch_signed(gnn_map, patch_radius, patch_score_agg),
+        _patch_magnitude(swe_map, patch_radius, patch_score_agg),
+        _patch_magnitude(gnn_map, patch_radius, patch_score_agg),
     )
     return GroupMetrics(
         group_name=group_name,
@@ -235,25 +235,13 @@ def compute_alignment_report(
         sigma_deg=sigma_deg,
     )
 
-    if gnn_main_maps is None and gnn_ig_maps:
-        raise ValueError(
-            "compute_alignment_report requires gnn_main_maps for signed alignment; "
-            "magnitude-only gnn_ig_maps are not sufficient"
-        )
-
-    signed_maps = gnn_main_maps or {}
-    if "z_500" in gnn_ig_maps and "z_500" not in signed_maps:
-        raise ValueError(
-            "compute_alignment_report requires signed z_500 in gnn_main_maps"
-        )
+    magnitude_maps = gnn_ig_maps
     pairs = [
-        ("h", swe_result.S_h, "z_500", signed_maps, "signed z_500"),
-        ("uv", swe_result.S_uv, "uv_500", signed_maps, "signed uv_500"),
+        ("h", swe_result.S_h, "z_500", magnitude_maps),
+        ("uv", swe_result.S_uv, "uv_500", magnitude_maps),
     ]
-    for group_name, swe_map, gnn_key, source_maps, required_desc in pairs:
+    for group_name, swe_map, gnn_key, source_maps in pairs:
         if gnn_key not in source_maps:
-            if gnn_key in gnn_ig_maps:
-                print(f"  [Align] skip {group_name}: requires {required_desc}, got magnitude-only map")
             continue
         m = _group_metrics(swe_map, source_maps[gnn_key],
                            group_name, patch_radius, patch_score_agg, k_values)
@@ -408,8 +396,8 @@ def plot_alignment_scatter(
             ax.set_title(gname)
             continue
 
-        s = _patch_signed(score_map, patch_radius, patch_score_agg)
-        g = _patch_signed(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
+        s = _patch_magnitude(score_map, patch_radius, patch_score_agg)
+        g = _patch_magnitude(gnn_ig_maps[gnn_key], patch_radius, patch_score_agg)
         a, b = _safe_finite_pair(s, g)
         if len(a) < 3:
             continue

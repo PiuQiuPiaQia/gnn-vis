@@ -53,8 +53,8 @@ def test_compute_alignment_metrics_returns_valid_fields():
         patch_size=5,
         patch_radius=0,
         patch_score_agg="mean",
-        ig_signed_map=np.array([[4.0, 3.0, 1.0]]),
-        dlmsf_signed_map=np.array([[4.0, 2.0, 3.0]]),
+        ig_abs_map=np.array([[4.0, 3.0, 1.0]]),
+        dlmsf_abs_map=np.array([[4.0, 2.0, 3.0]]),
         topk_k=2,
     )
 
@@ -72,8 +72,8 @@ def test_compute_alignment_metrics_caps_topk_at_valid_patch_count():
         patch_size=5,
         patch_radius=0,
         patch_score_agg="mean",
-        ig_signed_map=np.array([[4.0, 3.0, 1.0]]),
-        dlmsf_signed_map=np.array([[4.0, 2.0, 3.0]]),
+        ig_abs_map=np.array([[4.0, 3.0, 1.0]]),
+        dlmsf_abs_map=np.array([[4.0, 2.0, 3.0]]),
         topk_k=50,
     )
 
@@ -87,12 +87,12 @@ def test_compute_alignment_metrics_preserves_sign_for_spearman():
         patch_size=3,
         patch_radius=0,
         patch_score_agg="mean",
-        ig_signed_map=np.array([[1.0, 2.0, 3.0]]),
-        dlmsf_signed_map=np.array([[-1.0, -2.0, -3.0]]),
+        ig_abs_map=np.array([[1.0, 2.0, 3.0]]),
+        dlmsf_abs_map=np.array([[1.0, 2.0, 3.0]]),
         topk_k=2,
     )
 
-    assert metrics.spearman_rho == pytest.approx(-1.0)
+    assert metrics.spearman_rho == pytest.approx(1.0)
 
 
 def test_compute_single_deletion_curve_produces_correct_deltas(monkeypatch):

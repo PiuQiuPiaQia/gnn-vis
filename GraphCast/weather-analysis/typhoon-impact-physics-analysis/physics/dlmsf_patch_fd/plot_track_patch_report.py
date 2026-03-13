@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import BoundaryNorm, ListedColormap
 
-from physics.swe.alignment import _patch_signed, _safe_finite_pair
+from physics.swe.alignment import _patch_magnitude, _safe_finite_pair
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ def plot_track_patch_overlap_k50(
 
 
 # ---------------------------------------------------------------------------
-# Figure 2: Signed grid-level scatter (rank agreement)
+# Figure 2: Abs grid-level scatter (hotspot agreement)
 # ---------------------------------------------------------------------------
 
 
@@ -188,13 +188,13 @@ def plot_track_patch_scatter(
     if not isinstance(scatter, dict):
         return None
 
-    x_signed_map = _as_float_array(scatter["x_signed_map"], ndim=2)
-    y_signed_map = _as_float_array(scatter["y_signed_map"], ndim=2)
+    x_abs_map = _as_float_array(scatter["x_abs_map"], ndim=2)
+    y_abs_map = _as_float_array(scatter["y_abs_map"], ndim=2)
     patch_radius = int(scatter.get("patch_radius", 0))
     patch_score_agg = str(scatter.get("patch_score_agg", "mean"))
     x, y = _safe_finite_pair(
-        _patch_signed(x_signed_map, patch_radius, patch_score_agg),
-        _patch_signed(y_signed_map, patch_radius, patch_score_agg),
+        _patch_magnitude(x_abs_map, patch_radius, patch_score_agg),
+        _patch_magnitude(y_abs_map, patch_radius, patch_score_agg),
     )
     spearman_rho = float(scatter["spearman_rho"])
 
@@ -208,9 +208,9 @@ def plot_track_patch_scatter(
     ax.scatter(x, y, alpha=0.7, s=40, color="#2980b9")
     ax.set_xscale("symlog", linthresh=_positive_linthresh(x))
     ax.set_yscale("symlog", linthresh=_positive_linthresh(y))
-    ax.set_xlabel(f"DLMSF_{direction} signed patch score")
-    ax.set_ylabel("IG signed patch score")
-    ax.set_title("Signed Grid-Level Rank Agreement")
+    ax.set_xlabel(f"|DLMSF_{direction}| patch score")
+    ax.set_ylabel("|IG| patch score")
+    ax.set_title("Patch-Level Hotspot Agreement")
     ax.grid(alpha=0.25)
 
     annotation = _format_scatter_annotation(spearman_rho=spearman_rho)

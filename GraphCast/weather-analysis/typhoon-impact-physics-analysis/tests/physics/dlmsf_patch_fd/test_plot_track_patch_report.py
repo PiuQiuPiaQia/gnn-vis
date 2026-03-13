@@ -36,8 +36,8 @@ def _dummy_visualization_payload():
             "iou_at_50": 0.5,
         },
         "scatter": {
-            "x_signed_map": [[1.0, -2.0], [3.0, -4.0]],
-            "y_signed_map": [[-1.5, 2.5], [0.5, -3.5]],
+            "x_abs_map": [[1.0, 2.0], [3.0, 4.0]],
+            "y_abs_map": [[1.5, 2.5], [0.5, 3.5]],
             "patch_radius": 0,
             "patch_score_agg": "mean",
             "spearman_rho": 0.7,
@@ -216,8 +216,8 @@ def test_scatter_xlabel_is_dlmsf(monkeypatch):
                 "visualization": {
                     "meta": {"direction": "along"},
                     "scatter": {
-                        "x_signed_map": [[1.0, -2.0], [3.0, -4.0]],
-                        "y_signed_map": [[-1.5, 2.5], [0.5, -3.5]],
+                        "x_abs_map": [[1.0, 2.0], [3.0, 4.0]],
+                        "y_abs_map": [[1.5, 2.5], [0.5, 3.5]],
                         "patch_radius": 0,
                         "patch_score_agg": "mean",
                         "spearman_rho": 0.5,
@@ -239,7 +239,7 @@ def test_scatter_xlabel_is_dlmsf(monkeypatch):
     assert "IG" in ylabel, f"y-axis label should contain 'IG' (data is IG), got: {ylabel!r}"
 
 
-def test_scatter_uses_signed_grid_vectors(monkeypatch):
+def test_scatter_uses_abs_grid_vectors(monkeypatch):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -269,8 +269,8 @@ def test_scatter_uses_signed_grid_vectors(monkeypatch):
                 "visualization": {
                     "meta": {"direction": "along"},
                     "scatter": {
-                        "x_signed_map": [[1.0, -2.0], [3.0, -4.0]],
-                        "y_signed_map": [[-1.5, 2.5], [0.5, -3.5]],
+                        "x_abs_map": [[1.0, 2.0], [3.0, 4.0]],
+                        "y_abs_map": [[1.5, 2.5], [0.5, 3.5]],
                         "patch_radius": 0,
                         "patch_score_agg": "mean",
                         "spearman_rho": -0.8,
@@ -285,5 +285,5 @@ def test_scatter_uses_signed_grid_vectors(monkeypatch):
         out = os.path.join(tmp, "scatter.png")
         plot_track_patch_report.plot_track_patch_scatter(report, out)
 
-    np.testing.assert_array_equal(captured["x"], np.array([1.0, -2.0, 3.0, -4.0]))
-    np.testing.assert_array_equal(captured["y"], np.array([-1.5, 2.5, 0.5, -3.5]))
+    np.testing.assert_array_equal(captured["x"], np.array([1.0, 2.0, 3.0, 4.0]))
+    np.testing.assert_array_equal(captured["y"], np.array([1.5, 2.5, 0.5, 3.5]))

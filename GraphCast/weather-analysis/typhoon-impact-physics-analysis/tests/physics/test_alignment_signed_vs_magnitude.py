@@ -1,9 +1,9 @@
 # tests/physics/test_alignment_signed_vs_magnitude.py
 # -*- coding: utf-8 -*-
-"""Tests for signed-vs-magnitude preprocessing in alignment utilities.
+"""Tests for magnitude preprocessing in alignment utilities.
 
 TDD: These tests verify that:
-- signed correlation/scatter path preserves negative values instead of forcing abs
+- main correlation/scatter path uses magnitude preprocessing
 - Top-K overlap / IoU path uses magnitude-style preprocessing
 - plotting API still works with refactored helpers
 """
@@ -45,36 +45,32 @@ def _make_positive_map(shape=(10, 12), seed=42) -> np.ndarray:
 
 
 # =============================================================================
-# Test: compute_spearman preserves signed values
+# Test: compute_spearman uses magnitude preprocessing
 # =============================================================================
 
-class TestComputeSpearmanSignedPreprocessing:
-    """Spearman correlation should use signed-preserving preprocessing."""
+class TestComputeSpearmanMagnitudePreprocessing:
+    """Spearman correlation should use magnitude preprocessing."""
 
-    def test_spearman_preserves_negative_values(self):
-        """Signed values should be preserved, not abs'd, for correlation."""
+    def test_spearman_treats_negative_values_by_magnitude(self):
+        """Opposite-sign maps with equal magnitude should still agree."""
         # Create maps with strong negative correlation
         swe_map = _make_signed_map(seed=0)
         # Create gnn_map that's negatively correlated (flip sign)
         gnn_map = -swe_map.copy() + np.random.default_rng(1).standard_normal(swe_map.shape) * 0.1
         
-        # If values are preserved (not abs'd), we should get strong negative correlation
+        # With magnitude semantics, opposite-sign equal-magnitude maps should agree
         rho, pval = compute_spearman(swe_map, gnn_map, patch_radius=1)
-        
-        # With signed preservation, rho should be strongly negative
-        # With abs-forcing, rho would be near +1
-        assert rho < 0, f"Expected negative rho for negatively correlated maps, got {rho}"
-        assert rho < -0.5, f"Expected strongly negative rho (< -0.5), got {rho}"
+        assert rho > 0.5, f"Expected positive rho for magnitude agreement, got {rho}"
 
     def test_spearman_with_patch_radius_zero(self):
-        """Even with patch_radius=0, signed values should be preserved."""
+        """Even with patch_radius=0, magnitude preprocessing should apply."""
         swe_map = _make_signed_map(seed=2)
         gnn_map = -swe_map.copy()  # Perfect negative correlation
         
         rho, pval = compute_spearman(swe_map, gnn_map, patch_radius=0)
         
-        # Should be near -1 (perfect negative correlation)
-        assert rho < -0.95, f"Expected rho near -1, got {rho}"
+        # Should be near +1 after abs preprocessing
+        assert rho > 0.95, f"Expected rho near +1, got {rho}"
 
     def test_spearman_with_all_positive_values_still_works(self):
         """All-positive maps should work correctly."""
@@ -167,14 +163,14 @@ class TestTopkOverlapMagnitudePreprocessing:
 
 
 # =============================================================================
-# Test: scatter plot uses signed preprocessing
+# Test: scatter plot uses magnitude preprocessing
 # =============================================================================
 
-class TestScatterPlotSignedPreprocessing:
-    """Scatter plots should show signed values, not abs'd."""
+class TestScatterPlotMagnitudePreprocessing:
+    """Scatter plots should show magnitude values."""
 
-    def test_scatter_preserves_signed_values(self, tmp_path):
-        """Scatter plot should show both positive and negative ranges."""
+    def test_scatter_handles_signed_inputs_via_magnitude(self, tmp_path):
+        """Scatter plot should still render when source maps contain negatives."""
         swe_map = _make_signed_map(seed=20)
         gnn_map = _make_signed_map(seed=21)
         
@@ -430,9 +426,9 @@ class TestMagnitudeRankingExact:
 class TestScatterPreprocessingDirect:
     """Directly assert scatter preprocessing semantics."""
 
-    def test_scatter_uses_patch_signed_not_magnitude(self):
-        """Scatter must use signed patching, not magnitude."""
-        from physics.swe.alignment import _patch_signed, _patch_magnitude
+    def test_scatter_uses_patch_magnitude(self):
+        """Scatter must use magnitude patching."""
+        from physics.swe.alignment import _patch_magnitude
         
         # Create a map with strong negative values
         arr = np.array([
@@ -440,20 +436,15 @@ class TestScatterPreprocessingDirect:
             [50.0, -50.0],
         ])
         
-        signed_result = _patch_signed(arr, radius=0, agg="mean")
         magnitude_result = _patch_magnitude(arr, radius=0, agg="mean")
-        
-        # Signed should preserve negative values
-        assert signed_result[0, 1] == -100.0, "Signed preprocessing should preserve -100"
-        assert signed_result[1, 1] == -50.0, "Signed preprocessing should preserve -50"
-        
+
         # Magnitude should use abs
         assert magnitude_result[0, 1] == 100.0, "Magnitude preprocessing should give |−100|=100"
         assert magnitude_result[1, 1] == 50.0, "Magnitude preprocessing should give |−50|=50"
 
     def test_scatter_data_matches_spearman_input(self):
         """Scatter plot data must match what compute_spearman uses."""
-        from physics.swe.alignment import _patch_signed, _safe_finite_pair
+        from physics.swe.alignment import _patch_magnitude, _safe_finite_pair
         
         swe_map = np.array([
             [10.0, -5.0, np.nan, 7.0],
@@ -465,9 +456,9 @@ class TestScatterPreprocessingDirect:
             [np.nan, 1.5, 0.5, 4.0],
         ])
         
-        # What scatter uses (via _patch_signed and _safe_finite_pair)
-        s_patch = _patch_signed(swe_map, radius=0, agg="mean")
-        g_patch = _patch_signed(gnn_map, radius=0, agg="mean")
+        # What scatter uses (via _patch_magnitude and _safe_finite_pair)
+        s_patch = _patch_magnitude(swe_map, radius=0, agg="mean")
+        g_patch = _patch_magnitude(gnn_map, radius=0, agg="mean")
         s_scatter, g_scatter = _safe_finite_pair(s_patch, g_patch)
         
         # What spearman uses
@@ -480,9 +471,9 @@ class TestScatterPreprocessingDirect:
         # Spearman should return valid result with same data
         assert not np.isnan(rho), f"Spearman should return valid value with {len(s_scatter)} points"
 
-    def test_scatter_preserves_sign_in_values(self, tmp_path):
-        """Scatter must show both positive and negative values."""
-        from physics.swe.alignment import _patch_signed, _safe_finite_pair
+    def test_scatter_uses_nonnegative_values(self, tmp_path):
+        """Scatter main path should use nonnegative magnitude values."""
+        from physics.swe.alignment import _patch_magnitude, _safe_finite_pair
         
         # Maps with clear positive/negative correlation pattern
         swe_map = np.array([
@@ -490,20 +481,17 @@ class TestScatterPreprocessingDirect:
             [8.0, -8.0, 4.0, -4.0],
         ])
         
-        gnn_map = -swe_map * 0.9  # Negative correlation, preserved sign pattern
+        gnn_map = -swe_map * 0.9
         
-        s_patch = _patch_signed(swe_map, radius=0, agg="mean")
-        g_patch = _patch_signed(gnn_map, radius=0, agg="mean")
+        s_patch = _patch_magnitude(swe_map, radius=0, agg="mean")
+        g_patch = _patch_magnitude(gnn_map, radius=0, agg="mean")
         s_vals, g_vals = _safe_finite_pair(s_patch, g_patch)
         
-        # Verify both positive and negative values exist in scatter data
-        assert np.any(s_vals > 0), "Scatter should have positive SWE values"
-        assert np.any(s_vals < 0), "Scatter should have negative SWE values"
-        assert np.any(g_vals > 0), "Scatter should have positive GNN values"
-        assert np.any(g_vals < 0), "Scatter should have negative GNN values"
+        assert np.all(s_vals >= 0), "Magnitude scatter should have nonnegative SWE values"
+        assert np.all(g_vals >= 0), "Magnitude scatter should have nonnegative GNN values"
 
-    def test_plot_alignment_scatter_passes_signed_joint_finite_vectors(self, tmp_path, monkeypatch):
-        """The plotting path should pass signed jointly-finite values into scatter."""
+    def test_plot_alignment_scatter_passes_magnitude_joint_finite_vectors(self, tmp_path, monkeypatch):
+        """The plotting path should pass magnitude jointly-finite values into scatter."""
         captured: list[tuple[np.ndarray, np.ndarray]] = []
 
         def _capture(self, x, y, *args, **kwargs):
@@ -517,7 +505,7 @@ class TestScatterPreprocessingDirect:
         gnn_ig_maps = {"z_500": gnn_map}
         pairs = [("h", swe_map, "z_500", "SWE", "GNN")]
         report = AlignmentReport(0, 6, 0, "mean", 3.0)
-        report.groups.append(GroupMetrics("h", -1.0, 0.0, {50: 0.0}, 4))
+        report.groups.append(GroupMetrics("h", 1.0, 0.0, {50: 0.0}, 4))
 
         plot_alignment_scatter(
             pairs, gnn_ig_maps, report,
@@ -528,11 +516,11 @@ class TestScatterPreprocessingDirect:
 
         assert len(captured) == 1
         x_vals, y_vals = captured[0]
-        np.testing.assert_array_equal(x_vals, np.array([10.0, -5.0, -1.0, 3.0]))
-        np.testing.assert_array_equal(y_vals, np.array([-8.0, 4.0, 1.0, -2.0]))
+        np.testing.assert_array_equal(x_vals, np.array([10.0, 5.0, 1.0, 3.0]))
+        np.testing.assert_array_equal(y_vals, np.array([8.0, 4.0, 1.0, 2.0]))
 
     def test_plot_alignment_scatter_can_abs_gnn_values_for_display(self, tmp_path, monkeypatch):
-        """Display-only mode can abs the GNN axis without changing scatter pairing."""
+        """Display-only mode remains compatible with already-magnitude data."""
         captured: list[tuple[np.ndarray, np.ndarray]] = []
 
         def _capture(self, x, y, *args, **kwargs):
@@ -546,7 +534,7 @@ class TestScatterPreprocessingDirect:
         gnn_ig_maps = {"z_500": gnn_map}
         pairs = [("h", swe_map, "z_500", "SWE", "|GNN|")]
         report = AlignmentReport(0, 6, 0, "mean", 3.0)
-        report.groups.append(GroupMetrics("h", -1.0, 0.0, {50: 0.0}, 4))
+        report.groups.append(GroupMetrics("h", 1.0, 0.0, {50: 0.0}, 4))
 
         plot_alignment_scatter(
             pairs, gnn_ig_maps, report,
@@ -558,7 +546,7 @@ class TestScatterPreprocessingDirect:
 
         assert len(captured) == 1
         x_vals, y_vals = captured[0]
-        np.testing.assert_array_equal(x_vals, np.array([10.0, -5.0, -1.0, 3.0]))
+        np.testing.assert_array_equal(x_vals, np.array([10.0, 5.0, 1.0, 3.0]))
         np.testing.assert_array_equal(y_vals, np.array([8.0, 4.0, 1.0, 2.0]))
 
 
@@ -601,7 +589,7 @@ class TestExistingBehaviorPreserved:
 
 
 class TestComputeAlignmentReportContracts:
-    def test_magnitude_only_grouped_maps_require_explicit_signed_main_maps(self):
+    def test_magnitude_only_grouped_maps_drive_report_groups(self):
         swe_result = SimpleNamespace(
             target_time_idx=0,
             S_h=np.array([[1.0, -1.0], [0.5, -0.5]]),
@@ -612,14 +600,14 @@ class TestComputeAlignmentReportContracts:
             "uv_500": np.array([[2.0, 2.0], [1.0, 1.0]]),
         }
 
-        with pytest.raises(ValueError, match="gnn_main_maps"):
-            compute_alignment_report(
-                swe_result=cast(Any, swe_result),
-                gnn_ig_maps=grouped_maps,
-                patch_radius=0,
-            )
+        report = compute_alignment_report(
+            swe_result=cast(Any, swe_result),
+            gnn_ig_maps=grouped_maps,
+            patch_radius=0,
+        )
+        assert [group.group_name for group in report.groups] == ["h", "uv"]
 
-    def test_empty_signed_map_dict_also_rejects_magnitude_only_grouped_maps(self):
+    def test_empty_signed_map_dict_does_not_block_magnitude_only_groups(self):
         swe_result = SimpleNamespace(
             target_time_idx=0,
             S_h=np.array([[1.0, -1.0], [0.5, -0.5]]),
@@ -629,15 +617,15 @@ class TestComputeAlignmentReportContracts:
             "z_500": np.array([[1.0, 1.0], [0.5, 0.5]]),
         }
 
-        with pytest.raises(ValueError, match="signed z_500"):
-            compute_alignment_report(
-                swe_result=cast(Any, swe_result),
-                gnn_ig_maps=grouped_maps,
-                gnn_main_maps={},
-                patch_radius=0,
-            )
+        report = compute_alignment_report(
+            swe_result=cast(Any, swe_result),
+            gnn_ig_maps=grouped_maps,
+            gnn_main_maps={},
+            patch_radius=0,
+        )
+        assert [group.group_name for group in report.groups] == ["h"]
 
-    def test_signed_main_maps_enable_signed_report_groups(self):
+    def test_magnitude_groups_include_uv_when_available(self):
         swe_result = SimpleNamespace(
             target_time_idx=0,
             S_h=np.array([[1.0, -1.0], [0.5, -0.5], [0.25, -0.25]]),
@@ -658,4 +646,4 @@ class TestComputeAlignmentReportContracts:
             patch_radius=0,
         )
 
-        assert [group.group_name for group in report.groups] == ["h"]
+        assert [group.group_name for group in report.groups] == ["h", "uv"]

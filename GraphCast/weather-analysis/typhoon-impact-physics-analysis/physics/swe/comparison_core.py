@@ -417,7 +417,7 @@ def _build_dlmsf_alignment_inputs(
 
     if "uv_500" in magnitude_gnn_maps and "uv_500" not in signed_gnn_maps:
         warnings.append(
-            "Signed DLMSF main comparison for uv_500 skipped: only magnitude GNN uv_500 is available."
+            "DLMSF main comparison for uv_500 uses magnitude GNN uv_500 only."
         )
 
     overlap_pairs = [
@@ -445,14 +445,13 @@ def _build_swe_alignment_inputs(
     main_pairs_metrics: List[tuple[str, np.ndarray, str]] = []
     main_pairs_scatter: List[tuple[str, np.ndarray, str, str, str]] = []
 
-    if "z_500" in signed_gnn_maps:
+    if "z_500" in magnitude_gnn_maps:
         main_pairs_metrics.append(("h", swe_result.S_h, "z_500"))
-        main_pairs_scatter.append(("h", swe_result.S_h, "z_500", "SWE $S_h$", "|GNN IG (signed z₅₀₀)|"))
+        main_pairs_scatter.append(("h", swe_result.S_h, "z_500", "|SWE $S_h$|", "|GNN IG (z₅₀₀)|"))
 
-    if "uv_500" in magnitude_gnn_maps and "uv_500" not in signed_gnn_maps:
-        warnings.append(
-            "Signed SWE main comparison for uv_500 skipped: only magnitude GNN uv_500 is available."
-        )
+    if "uv_500" in magnitude_gnn_maps:
+        main_pairs_metrics.append(("uv", swe_result.S_uv, "uv_500"))
+        main_pairs_scatter.append(("uv", swe_result.S_uv, "uv_500", "|SWE $S_{uv}$|", "|GNN IG (uv₅₀₀)|"))
 
     overlap_pairs: List[tuple[str, np.ndarray, str]] = []
     if "z_500" in magnitude_gnn_maps:
@@ -461,7 +460,7 @@ def _build_swe_alignment_inputs(
         overlap_pairs.append(("uv", swe_result.S_uv, "uv_500"))
 
     return {
-        "main_gnn_maps": signed_gnn_maps,
+        "main_gnn_maps": magnitude_gnn_maps,
         "supplemental_gnn_maps": magnitude_gnn_maps,
         "main_pairs_metrics": main_pairs_metrics,
         "main_pairs_scatter": main_pairs_scatter,
@@ -731,7 +730,7 @@ def run_physics_comparison() -> Dict[str, Any]:
             abs_gnn_for_display=True,
         )
     else:
-        print("  [warn] SWE signed main comparison is empty, skipping scatter artifact.")
+        print("  [warn] SWE magnitude main comparison is empty, skipping scatter artifact.")
 
     if _should_emit_topk_artifacts(swe_pairs):
         plot_topk_iou_curves(

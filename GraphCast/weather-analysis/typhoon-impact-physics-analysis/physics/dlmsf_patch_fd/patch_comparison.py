@@ -12,7 +12,7 @@ import xarray
 
 from physics.dlmsf_patch_fd.dlmsf_sensitivity import DLMSFSensitivityResult, _extract_uv_levels, _haversine_km, compute_dlmsf_925_300, compute_dlmsf_patch_fd
 from physics.dlmsf_patch_fd.ig_phys import compute_ig_phys_dlmsf_along
-from physics.swe.alignment import _patch_signed, _safe_finite_pair
+from physics.swe.alignment import _patch_magnitude, _safe_finite_pair
 from shared.analysis_pipeline import AnalysisConfig, AnalysisContext, resolve_spatial_variables
 from shared.importance_common import collapse_input_attribution_to_latlon
 from shared.patch_geometry import CenteredWindow, build_centered_window, build_sliding_patches, patch_scores_to_grid
@@ -234,10 +234,8 @@ def _build_case_visualization_payload(
     patch_radius: int,
     patch_score_agg: str,
     topk_k: int,
-    ig_signed_map: np.ndarray,
     ig_abs_map: np.ndarray,
     ig_abs_scores: np.ndarray,
-    dlmsf_signed_map: np.ndarray,
     dlmsf_abs_map: np.ndarray,
     dlmsf_abs_scores: np.ndarray,
 ) -> Dict[str, Any]:
@@ -246,14 +244,14 @@ def _build_case_visualization_payload(
     Payload sections:
         meta        - metadata used for output filenames
         overlap     - |IG|/|DLMSF| heat maps, Top-K overlap mask, Spearman rho, IoU@50
-        scatter     - signed 2-D maps + aggregation settings for SWE-aligned scatter
+        scatter     - abs 2-D maps + aggregation settings for hotspot scatter
         deletion    - None by default; wired in by run_track_patch_analysis
     """
     ig_abs = np.asarray(ig_abs_scores, dtype=np.float64)
     dlmsf_abs = np.asarray(dlmsf_abs_scores, dtype=np.float64)
-    ig_grid_signed = _patch_signed(np.asarray(ig_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
-    dlmsf_grid_signed = _patch_signed(np.asarray(dlmsf_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
-    scatter_x, scatter_y = _safe_finite_pair(dlmsf_grid_signed, ig_grid_signed)
+    ig_grid_abs = _patch_magnitude(np.asarray(ig_abs_map, dtype=np.float64), patch_radius, patch_score_agg)
+    dlmsf_grid_abs = _patch_magnitude(np.asarray(dlmsf_abs_map, dtype=np.float64), patch_radius, patch_score_agg)
+    scatter_x, scatter_y = _safe_finite_pair(dlmsf_grid_abs, ig_grid_abs)
 
     # Compute metrics from patch-level arrays
     iou_at_50, actual_k, ig_top_idx, dlmsf_top_idx = _topk_iou(ig_abs, dlmsf_abs, topk_k)
@@ -287,8 +285,8 @@ def _build_case_visualization_payload(
             "iou_at_50": float(iou_at_50),
         },
         "scatter": {
-            "x_signed_map": np.asarray(dlmsf_signed_map, dtype=np.float64).tolist(),
-            "y_signed_map": np.asarray(ig_signed_map, dtype=np.float64).tolist(),
+            "x_abs_map": np.asarray(dlmsf_abs_map, dtype=np.float64).tolist(),
+            "y_abs_map": np.asarray(ig_abs_map, dtype=np.float64).tolist(),
             "patch_radius": int(patch_radius),
             "patch_score_agg": str(patch_score_agg),
             "spearman_rho": float(spearman_rho),
@@ -555,18 +553,18 @@ def _compute_alignment_metrics(
     patch_size: int,
     patch_radius: int,
     patch_score_agg: str,
-    ig_signed_map: np.ndarray,
-    dlmsf_signed_map: np.ndarray,
+    ig_abs_map: np.ndarray,
+    dlmsf_abs_map: np.ndarray,
     topk_k: int,
 ) -> PatchAlignmentMetrics:
-    ig_patch_signed = _patch_signed(np.asarray(ig_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
-    dlmsf_patch_signed = _patch_signed(np.asarray(dlmsf_signed_map, dtype=np.float64), patch_radius, patch_score_agg)
-    x, y = _safe_finite_pair(ig_patch_signed, dlmsf_patch_signed)
+    ig_patch_abs = _patch_magnitude(np.asarray(ig_abs_map, dtype=np.float64), patch_radius, patch_score_agg)
+    dlmsf_patch_abs = _patch_magnitude(np.asarray(dlmsf_abs_map, dtype=np.float64), patch_radius, patch_score_agg)
+    x, y = _safe_finite_pair(ig_patch_abs, dlmsf_patch_abs)
 
     spearman_rho, spearman_pval = _safe_corr(scipy.stats.spearmanr, x, y)
     iou_topk, actual_topk, _, _ = _topk_iou(
-        np.abs(ig_patch_signed).ravel(),
-        np.abs(dlmsf_patch_signed).ravel(),
+        ig_patch_abs.ravel(),
+        dlmsf_patch_abs.ravel(),
         topk_k,
     )
 
@@ -1145,8 +1143,8 @@ def run_track_patch_analysis(
         patch_size=main_patch_size,
         patch_radius=int(runtime_cfg.patch_radius),
         patch_score_agg=str(runtime_cfg.patch_score_agg),
-        ig_signed_map=ig_maps["signed_cell_map"],
-        dlmsf_signed_map=dlmsf_result.S_signed_map,
+        ig_abs_map=ig_maps["abs_cell_map"],
+        dlmsf_abs_map=dlmsf_result.S_abs_map,
         topk_k=topk_k,
     )
     deletion = None
@@ -1193,10 +1191,8 @@ def run_track_patch_analysis(
             patch_radius=int(runtime_cfg.patch_radius),
             patch_score_agg=str(runtime_cfg.patch_score_agg),
             topk_k=topk_k,
-            ig_signed_map=ig_maps["signed_cell_map"],
             ig_abs_map=ig_patch["abs_map"],
             ig_abs_scores=ig_patch["abs_scores"],
-            dlmsf_signed_map=dlmsf_result.S_signed_map,
             dlmsf_abs_map=dlmsf_result.S_abs_map,
             dlmsf_abs_scores=np.abs(dlmsf_result.patch_parallel_scores),
         ),
